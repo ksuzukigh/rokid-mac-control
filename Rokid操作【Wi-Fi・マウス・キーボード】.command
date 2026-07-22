@@ -190,12 +190,21 @@ if [ -z "$ADDRESS" ] || ! adb -s "$ADDRESS" get-state 2>/dev/null | grep -q '^de
         adb -s "$USB_SERIAL" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
         adb -s "$USB_SERIAL" shell wm dismiss-keyguard >/dev/null 2>&1
         adb -s "$USB_SERIAL" shell am start -a android.settings.WIFI_SETTINGS >/dev/null 2>&1
-        sleep 2
-        # RV101は設定画面でもすぐに消灯する。
-        # Enterが単なるウェイクアップにならないよう、直前に画面を起こす。
-        adb -s "$USB_SERIAL" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
-        sleep 0.2
-        adb -s "$USB_SERIAL" shell input keyevent KEYCODE_ENTER >/dev/null 2>&1
+        # 設定画面の起動やフォーカスが遅れる場合があるため、
+        # Wi-Fiがオンになるまで最大3回確認してやり直す。
+        for wifi_toggle_attempt in 1 2 3; do
+            sleep 2
+            # RV101は設定画面でもすぐに消灯する。
+            # Enterが単なるウェイクアップにならないよう、直前に画面を起こす。
+            adb -s "$USB_SERIAL" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
+            sleep 0.3
+            adb -s "$USB_SERIAL" shell input keyevent KEYCODE_ENTER >/dev/null 2>&1
+            sleep 1
+            WIFI_STATUS="$(adb -s "$USB_SERIAL" shell cmd wifi status 2>/dev/null)"
+            if ! printf '%s' "$WIFI_STATUS" | grep -q 'Wifi is disabled'; then
+                break
+            fi
+        done
         OPENED_WIFI_SETTINGS=1
     fi
 
@@ -250,7 +259,16 @@ if ! "$PYTHON" -c 'import ApplicationServices as A; raise SystemExit(0 if A.AXIs
     pause_and_exit
 fi
 
-if ! start_mac_mode; then
+MAC_MODE_STARTED=0
+for mac_mode_attempt in 1 2 3; do
+    if start_mac_mode; then
+        MAC_MODE_STARTED=1
+        break
+    fi
+    sleep 2
+done
+
+if [ "$MAC_MODE_STARTED" -ne 1 ]; then
     echo "Mac操作モードのWi-Fi監視を開始できませんでした。"
     pause_and_exit
 fi
