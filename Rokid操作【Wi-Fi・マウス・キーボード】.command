@@ -225,7 +225,8 @@ if [ -z "$ADDRESS" ] || ! adb -s "$ADDRESS" get-state 2>/dev/null | grep -q '^de
     fi
 
     if [ "$OPENED_WIFI_SETTINGS" -eq 1 ]; then
-        adb -s "$USB_SERIAL" shell input keyevent KEYCODE_BACK >/dev/null 2>&1
+        adb -s "$USB_SERIAL" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
+        adb -s "$USB_SERIAL" shell input keyevent KEYCODE_HOME >/dev/null 2>&1
     fi
 
     ADDRESS="$ROKID_IP:5555"
