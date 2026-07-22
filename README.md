@@ -130,6 +130,12 @@ Rokid Glasses RV101の実機で、Wi-Fi接続・画面表示・マウス・キ�
 
 写真をMacへ直接送りたい場合は、別公開の[Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)を使えます。
 
+## 参考と謝辞
+
+このツールは、bcefghjさんが公開している[rokid-glasses-control](https://github.com/bcefghj/rokid-collection/tree/main/rokid-glasses-control)を参考に開発しました。macOS上でADBとscrcpyを組み合わせ、pynputでキーボード操作をRokidへ送るという基本構成を学ばせていただきました。貴重な成果を公開してくださったbcefghjさんに感謝します。
+
+本ツールではRokid Glasses RV101の実機動作に合わせ、ホーム画面用キー操作、Wi-Fiの自動復旧、接続設定、キーボードの誤送信防止などを追加・調整しています。
+
 <details>
 <summary>開発者向け情報</summary>
 
