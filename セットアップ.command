@@ -18,12 +18,25 @@ fi
 
 echo "Rokid操作に必要なソフトを準備しています..."
 if brew install --help | grep -q -- '--no-ask'; then
-    brew install --yes android-platform-tools scrcpy python
+    brew install --yes android-platform-tools scrcpy
 else
-    brew install android-platform-tools scrcpy python
+    brew install android-platform-tools scrcpy
 fi
 
-python3 -m venv "$VENV"
+# macOS付属のPythonを優先する。Python 3.14ではmacOSのキー入力監視が
+# 起動していても反応しないことがあるため、3.9〜3.13を使用する。
+PYTHON_BIN="/usr/bin/python3"
+if ! "$PYTHON_BIN" -c 'import sys, venv; raise SystemExit(not ((3, 9) <= sys.version_info[:2] < (3, 14)))' >/dev/null 2>&1; then
+    echo "安定版のPythonを準備しています..."
+    if brew install --help | grep -q -- '--no-ask'; then
+        brew install --yes python@3.13
+    else
+        brew install python@3.13
+    fi
+    PYTHON_BIN="$(brew --prefix python@3.13)/bin/python3.13"
+fi
+
+"$PYTHON_BIN" -m venv --clear "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip
 "$VENV/bin/python" -m pip install -r "$SCRIPT_DIR/requirements.txt"
 
