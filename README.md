@@ -4,6 +4,8 @@ Rokid Glasses RV101の画面をMacに表示し、マウスとキーボードで�
 
 最初の設定後は、Mac側のファイルを1つダブルクリックするだけで使えます。RokidのWi-Fiが一時的にオフになっても、操作中は自動で復旧します。
 
+![MacからRokid Glassesを操作するイメージ](docs/images/mac-control-overview.png)
+
 ## できること
 
 - Rokidの画面をMacのウィンドウに表示
