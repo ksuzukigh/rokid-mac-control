@@ -15,7 +15,7 @@ REMOTE_WATCHDOG_PID="/data/local/tmp/rokid_mac_wifi_watchdog.pid"
 WATCHDOG_GRACE_SECONDS=20
 
 pause_and_exit() {
-    read -r -p "Enterキーで閉じます..."
+    read -r -p "Enterキーで処理を終了します..."
     exit 1
 }
 
