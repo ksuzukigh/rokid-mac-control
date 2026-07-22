@@ -17,7 +17,11 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 
 echo "Rokid操作に必要なソフトを準備しています..."
-brew install android-platform-tools scrcpy python
+if brew install --help | grep -q -- '--no-ask'; then
+    brew install --yes android-platform-tools scrcpy python
+else
+    brew install android-platform-tools scrcpy python
+fi
 
 python3 -m venv "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip
