@@ -8,7 +8,7 @@ import time
 
 import ApplicationServices
 import Quartz
-from AppKit import NSWorkspace
+from AppKit import NSRunningApplication
 from pynput import keyboard
 
 
@@ -18,6 +18,7 @@ DOUBLE_TAP_INTERVAL = 0.35
 class ReliableKeyboardListener(keyboard.Listener):
     def __init__(self, *args, **kwargs):
         self.event_tap = None
+        self.target_is_scrcpy = False
         super().__init__(*args, **kwargs)
 
     def _create_event_tap(self):
@@ -33,6 +34,16 @@ class ReliableKeyboardListener(keyboard.Listener):
                 Quartz.CGEventTapEnable(self.event_tap, True)
                 print("キーボード入力監視を自動復旧しました。", flush=True)
             return event
+
+        target_pid = Quartz.CGEventGetIntegerValueField(
+            event,
+            Quartz.kCGEventTargetUnixProcessID,
+        )
+        target_app = NSRunningApplication.runningApplicationWithProcessIdentifier_(
+            target_pid
+        )
+        target_name = (target_app.localizedName() or "").lower() if target_app else ""
+        self.target_is_scrcpy = target_name == "scrcpy"
         return super()._handler(proxy, event_type, event, refcon)
 
     def ensure_enabled(self):
@@ -50,6 +61,7 @@ class RokidKeyboardController:
         self.state_lock = threading.RLock()
         self.action_lock = threading.Lock()
         self.space_timer = None
+        self.listener = None
 
     def _adb(self, *args):
         subprocess.run(
@@ -70,12 +82,6 @@ class RokidKeyboardController:
         )
         match = re.search(r"(\d+)\s*[x×]\s*(\d+)", result.stdout or result.stderr or "")
         return (int(match.group(1)), int(match.group(2))) if match else (480, 640)
-
-    @staticmethod
-    def _scrcpy_is_frontmost():
-        app = NSWorkspace.sharedWorkspace().frontmostApplication()
-        name = (app.localizedName() or "").lower() if app else ""
-        return "scrcpy" in name
 
     def _run_action(self, action):
         threading.Thread(target=self._locked_action, args=(action,), daemon=True).start()
@@ -158,7 +164,7 @@ class RokidKeyboardController:
             self._run_action(self._double_tap_center)
 
     def on_press(self, key):
-        if not self._scrcpy_is_frontmost():
+        if self.listener is None or not self.listener.target_is_scrcpy:
             return
 
         with self.state_lock:
@@ -200,10 +206,11 @@ class RokidKeyboardController:
         print("←/→ 上段アプリ / Enter 決定 / Esc 戻る / H 中央のHome")
         print("Shift+← メモ / Shift+→ アプリ一覧")
         print("スペース 画面中央 / 素早く2回でダブルタップ")
-        listener = ReliableKeyboardListener(
+        self.listener = ReliableKeyboardListener(
             on_press=self.on_press,
             on_release=self.on_release,
         )
+        listener = self.listener
         listener.start()
         listener.wait()
         try:
