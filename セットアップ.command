@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV="$SCRIPT_DIR/.venv-rokid-keyboard"
 
 pause_and_exit() {
-    read -r -p "Enterキーで閉じます..."
+    read -r -p "Enterキーで処理を終了します..."
     exit 1
 }
 
@@ -26,5 +26,4 @@ python3 -m venv "$VENV"
 echo
 echo "セットアップが完了しました。"
 echo "『Rokid操作【Wi-Fi・マウス・キーボード】.command』をダブルクリックしてください。"
-read -r -p "Enterキーで閉じます..."
-
+read -r -p "Enterキーで処理を終了します..."
