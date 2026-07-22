@@ -1,0 +1,6 @@
+.DS_Store
+.rokid_wifi_address
+.venv-rokid-keyboard/
+__pycache__/
+*.pyc
+
