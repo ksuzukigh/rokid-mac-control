@@ -15,6 +15,9 @@ REMOTE_WATCHDOG_PID="/data/local/tmp/rokid_mac_wifi_watchdog.pid"
 WATCHDOG_GRACE_SECONDS=20
 
 pause_and_exit() {
+    if [ "${ROKID_GUI_MODE:-0}" = "1" ]; then
+        exit 1
+    fi
     read -r -p "Enterキーで処理を終了します..."
     exit 1
 }
@@ -35,6 +38,26 @@ connect_wifi() {
     done
 
     wait "$connect_pid" >/dev/null 2>&1
+}
+
+discover_secure_wifi() {
+    DISCOVERED_ADDRESS=""
+
+    # Rokid再起動後は従来の5555番ではなく、Android標準の暗号化された
+    # ワイヤレスデバッグが毎回異なるポートで待ち受ける。
+    for discovery_attempt in 1 2 3 4 5 6 7 8 9 10; do
+        candidate="$(adb mdns services 2>/dev/null |
+            awk '$2 == "_adb-tls-connect._tcp" { print $3; exit }')"
+        if [ -n "$candidate" ]; then
+            connect_wifi "$candidate"
+            if adb -s "$candidate" get-state 2>/dev/null | grep -q '^device$'; then
+                DISCOVERED_ADDRESS="$candidate"
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+    return 1
 }
 
 heartbeat_loop() {
@@ -149,6 +172,14 @@ if [ -n "$ADDRESS" ]; then
     connect_wifi "$ADDRESS"
 fi
 
+# Rokid再起動後はWi-Fi ONが復旧した暗号化接続を自動検出する。
+if [ -z "$ADDRESS" ] || ! adb -s "$ADDRESS" get-state 2>/dev/null | grep -q '^device$'; then
+    if discover_secure_wifi; then
+        ADDRESS="$DISCOVERED_ADDRESS"
+        printf '%s\n' "$ADDRESS" > "$ADDRESS_FILE"
+    fi
+fi
+
 # Rokidの再起動やIP変更で接続できない場合は、USBからWi-Fi接続を自動復旧する。
 if [ -z "$ADDRESS" ] || ! adb -s "$ADDRESS" get-state 2>/dev/null | grep -q '^device$'; then
     if [ -n "$ADDRESS" ]; then
@@ -256,7 +287,11 @@ fi
 if ! "$PYTHON" -c 'import ApplicationServices as A; raise SystemExit(0 if A.AXIsProcessTrusted() else 1)'; then
     "$PYTHON" -c 'import ApplicationServices as A; A.AXIsProcessTrustedWithOptions({A.kAXTrustedCheckOptionPrompt: True})'
     open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-    echo "開いた設定画面で『ターミナル』を許可してから、もう一度実行してください。"
+    if [ "${ROKID_GUI_MODE:-0}" = "1" ]; then
+        echo "開いた設定画面で『Rokid Control』を許可してから、もう一度実行してください。"
+    else
+        echo "開いた設定画面で『ターミナル』を許可してから、もう一度実行してください。"
+    fi
     pause_and_exit
 fi
 

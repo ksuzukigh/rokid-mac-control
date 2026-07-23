@@ -40,7 +40,13 @@ fi
 "$VENV/bin/python" -m pip install --upgrade pip
 "$VENV/bin/python" -m pip install -r "$SCRIPT_DIR/requirements.txt"
 
+echo "Dockから起動できるMacアプリを作っています..."
+chmod +x "$SCRIPT_DIR/install_rokid_app.sh"
+"$SCRIPT_DIR/install_rokid_app.sh"
+
 echo
 echo "セットアップが完了しました。"
-echo "『Rokid操作【Wi-Fi・マウス・キーボード】.command』をダブルクリックしてください。"
+echo "アプリケーションフォルダの『Rokid Control』をDockへ追加して使えます。"
+echo "従来の『Rokid操作【Wi-Fi・マウス・キーボード】.command』も予備として残しています。"
+open -R "/Applications/Rokid Control.app"
 read -r -p "Enterキーで処理を終了します..."
