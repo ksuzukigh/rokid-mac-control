@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
 import re
 import subprocess
 import threading
@@ -232,7 +233,15 @@ def main():
         ApplicationServices.AXIsProcessTrustedWithOptions(
             {ApplicationServices.kAXTrustedCheckOptionPrompt: True}
         )
-        print("Macの『アクセシビリティ』でターミナルの操作を許可してください。")
+        permission_target = (
+            "Rokid Control"
+            if os.environ.get("ROKID_GUI_MODE") == "1"
+            else "ターミナル"
+        )
+        print(
+            "Macの『アクセシビリティ』で"
+            f"{permission_target}の操作を許可してください。"
+        )
         return 2
 
     RokidKeyboardController(args.serial).run()
