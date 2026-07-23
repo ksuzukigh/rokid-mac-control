@@ -2,9 +2,7 @@
 
 Rokid Glasses RV101の画面をMacに表示し、マウスとキーボードで操作するツールです。
 
-最初の設定後は、Dockの「Rokid Control」を1回クリックするだけで使えます。Terminalは表示されません。RokidのWi-Fiが一時的にオフになっても、操作中は自動で復旧します。
-
-本ツールは個人制作の非公式アプリで、Rokid社の公式アプリではありません。
+最初の設定後は、Dockの「Rokid Control」を1回クリックするだけで使えます。RokidのWi-Fiが一時的にオフになっても、操作中は自動で復旧します。
 
 ![MacからRokid Glassesを操作するイメージ](docs/images/mac-control-overview.png)
 
@@ -20,7 +18,7 @@ Rokid Glasses RV101の画面をMacに表示し、マウスとキーボードで�
 
 ## 用意するもの
 
-- Rokid Glasses RV101
+- ADB接続を利用できるRokid Glasses RV101
 - Mac
 - Rokidの開発用5ピンケーブル
 - MacとRokidを接続するWi-Fi
@@ -40,6 +38,8 @@ GitHub画面上部の緑色の「Code」ボタンを押し、「Download ZIP」�
 
 入っていない場合は、[Homebrew公式サイト](https://brew.sh/ja/)を開き、表示されたインストール用の文字列をコピーしてTerminalへ貼り付けます。
 
+現行版では、Rokidとの接続に使うADBと、Rokid画面を表示するscrcpyを準備するためにHomebrewが必要です。Macに適切なPythonがない場合は、キーボード操作用のPythonもHomebrewから準備します。
+
 Macのパスワードを求められたときは、入力中の文字や黒丸が画面に出ません。そのまま入力してEnterキーを押してください。
 
 ### 3. 操作に必要なソフトを入れる
@@ -50,6 +50,8 @@ Macのパスワードを求められたときは、入力中の文字や黒丸�
 4. 「セットアップが完了しました」と表示されたら、Enterキーを押します。
 
 ### 4. Rokidを接続して最初の起動をする
+
+このツールはADBを使うため、Rokid側で開発用のADB接続を利用できる状態が必要です。一般的なAndroidでいう「開発者向けオプション／USBデバッグ」に相当します。RV101の実機テストでは、別の設定画面を操作せず、開発用5ピンケーブルの接続とRokid側のUSB接続許可でADBを利用できました。
 
 1. MacとRokidを開発用5ピンケーブルでつなぎます。
 2. Dockの「Rokid Control」をクリックします。
