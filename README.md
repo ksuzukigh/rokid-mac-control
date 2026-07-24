@@ -139,7 +139,9 @@ Rokid Controlを終了してから、Macの「アプリケーション」フォ�
 
 ## 参考と謝辞
 
-本アプリは、bcefghjさんが公開している[rokid-glasses-control](https://github.com/bcefghj/rokid-collection/tree/main/rokid-glasses-control)を参考に開発しました。
+本アプリ開発のきっかけは、bcefghjさんが公開している[rokid-glasses-control](https://github.com/bcefghj/rokid-collection/tree/main/rokid-glasses-control)でした。Rokid AI GlassesをMacから操作するという着想を得られたことに感謝します。
+
+その後、Rokid AI Glasses RV101での実機検証を重ね、接続・操作・配布の仕組みを全面的に見直し、Swift製のMacアプリとして独自に再構築しました。
 
 本アプリには、[scrcpy](https://github.com/Genymobile/scrcpy)とAndroid Platform ToolsのADBを同梱しています。ライセンスと著作権表示はアプリ内の`Licenses`フォルダに収録しています。
 
