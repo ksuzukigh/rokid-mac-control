@@ -1,5 +1,0 @@
-pynput>=1.8,<2
-pyobjc-framework-ApplicationServices>=11,<13
-pyobjc-framework-Cocoa>=11,<13
-pyobjc-framework-Quartz>=11,<13
-
