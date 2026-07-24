@@ -20,7 +20,7 @@ Rokid AI Glasses RV101の画面をMacに表示し、Macのマウスとキーボ�
 - MacとRokidを同じWi-Fiに接続できる環境
 - Rokidのスマホアプリをインストール済みのスマートフォン
 
-Rokid AI Glasses RV101に付属する3ピンのUSBケーブルは充電専用です。初回接続には使用できないため、開発用USBケーブル（5ピン）を別に用意してください。
+Rokid AI Glasses RV101に付属する3ピンのUSBケーブルは充電専用で、Macとの接続には使用できません。開発用USBケーブル（5ピン）を別に用意してください。
 
 Rokidを再起動した後もUSBケーブルを使わずに接続したい場合は、別アプリの[Wi-Fi ON](https://github.com/ksuzukigh/rokid-wifi-on)もRokidにインストールしておきます。Wi-Fi ONは、再起動後にRokidのWi-Fi接続をオンにするアプリです。
 
