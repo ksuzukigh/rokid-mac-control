@@ -7,11 +7,8 @@ Rokid Glasses RV101の画面をMacに表示し、マウスとキーボードで�
 ## できること
 
 - Rokidの画面をMacへ表示
-- Macのマウスでクリック操作
-- MacのキーボードでRokidを操作
-- Wi-Fiが一時的に切れたときの自動復旧
-- Rokid再起動後に変わった接続先の自動検出
-- アプリ終了後の自動復旧処理の後片付け
+- MacのマウスとキーボードでRokidを操作
+- Wi-Fi接続と開発用USB接続の両方に対応
 
 Apple SiliconとIntelの両方のMacに対応しています。対応OSはmacOS 11以降です。
 
