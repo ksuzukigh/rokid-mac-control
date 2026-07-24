@@ -5,25 +5,25 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>ja</string>
     <key>CFBundleDisplayName</key>
-    <string>Rokid Control</string>
+    <string>Rokid Control Screen</string>
     <key>CFBundleExecutable</key>
-    <string>Rokid Control</string>
-    <key>CFBundleIconFile</key>
-    <string>RokidGlasses</string>
+    <string>scrcpy</string>
     <key>CFBundleIdentifier</key>
-    <string>io.github.ksuzukigh.rokid-mac-control</string>
+    <string>io.github.ksuzukigh.rokid-mac-control.screen</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Rokid Control</string>
+    <string>Rokid Control Screen</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.2</string>
+    <string>1.0</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>12.0</string>
+    <string>11.0</string>
+    <key>LSUIElement</key>
+    <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

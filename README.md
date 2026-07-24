@@ -1,102 +1,59 @@
 # Rokid Control
 
-Rokid Glasses RV101の画面をMacに表示し、マウスとキーボードで操作するツールです。
+Rokid Glasses RV101の画面をMacに表示し、マウスとキーボードで操作するアプリです。
 
-セットアップ後は、Dockから「Rokid Control」を起動します。RokidのWi-Fiが一時的にオフになっても、操作中は自動で復旧します。
+HomebrewやPythonの準備は不要です。DMGを開いて、普通のMacアプリと同じようにインストールできます。
 
 ![MacからRokid Glassesを操作するイメージ](docs/images/mac-control-overview.png)
 
 ## できること
 
-- Rokidの画面をMacのウィンドウに表示
+- Rokidの画面をMacへ表示
 - Macのマウスでクリック操作
 - MacのキーボードでRokidを操作
-- RokidのWi-Fiが切れたときの自動復旧
-- Wi-Fi復旧後の画面再表示
-- Dockから1クリックで起動
+- Wi-Fiが一時的に切れたときの自動復旧
+- Rokid再起動後に変わった接続先の自動検出
+- アプリ終了後の自動復旧処理の後片付け
 
-## 用意するもの
+Apple SiliconとIntelの両方のMacに対応しています。対応OSはmacOS 11以降です。
 
-- 開発者モードを有効にしたRokid Glasses RV101
-- Mac
-- Rokidの開発用5ピンケーブル
-- MacとRokidを接続するWi-Fi
-- Mac用の無料ツール「Homebrew」
+## ダウンロード
 
-## 最初の準備
+[Rokid Controlをダウンロード](https://github.com/ksuzukigh/rokid-mac-control/releases/latest/download/Rokid-Control.dmg)
 
-### 1. この一式をMacへ保存する
+## インストール
 
-GitHub画面上部の緑色の「Code」ボタンを押し、「Download ZIP」を選びます。ダウンロードしたZIPファイルをダブルクリックして開いてください。
+1. ダウンロードした`Rokid-Control.dmg`を開きます。
+2. `Rokid Control`を`Applications`へドラッグします。
+3. DMGを取り出します。
+4. Macの「アプリケーション」から`Rokid Control`を開きます。
 
-展開後のフォルダは、ダウンロードフォルダのままでも使えます。別の場所へ移す場合は、中のファイルだけでなくフォルダごと移してください。
+初回にMacがアプリを止めた場合は、`Rokid Control`を右クリックして「開く」を選び、確認画面でもう一度「開く」を押してください。
 
-### 2. Rokidの開発者モードを有効にする
+「キーボード操作の許可が必要です」と表示された場合は、開いた設定画面で`Rokid Control`をオンにしてから、アプリをもう一度開きます。
 
-このツールはADBを使うため、最初にRokidのスマホアプリ側で開発者モード（ADB）を有効にする必要があります。開発用5ピンケーブルをつなぐだけではADBを利用できません。
+## 最初の接続
 
-開発者モードを有効にした後、初回接続時にRokid側へUSB接続の確認が表示された場合は許可してください。
-
-### 3. Homebrewを用意する
-
-すでにHomebrewが入っているMacでは、この手順は不要です。
-
-入っていない場合は、[Homebrew公式サイト](https://brew.sh/ja/)を開き、表示されたインストール用の文字列をコピーしてTerminalへ貼り付けます。
-
-現行版では、Rokidとの接続に使うADBと、Rokid画面を表示するscrcpyを準備するためにHomebrewが必要です。Macに適切なPythonがない場合は、キーボード操作用のPythonもHomebrewから準備します。
-
-Macのパスワードを求められたときは、入力中の文字や黒丸が画面に出ません。そのまま入力してEnterキーを押してください。
-
-### 4. 操作に必要なソフトを入れる
-
-1. 展開したフォルダの`セットアップ.command`をダブルクリックします。
-2. Terminalが開き、必要なソフトを自動で準備します。初回は数分かかることがあります。
-3. 「Rokid Control」アプリが「アプリケーション」フォルダとDockへ自動で追加されます。
-4. 「セットアップが完了しました」と表示されたら、Enterキーを押します。
-
-### 5. Rokidを接続して最初の起動をする
+最初のインストール前に、Rokidのスマホアプリで開発者モードを有効にしておきます。
 
 1. MacとRokidを開発用5ピンケーブルでつなぎます。
-2. Dockの「Rokid Control」をクリックします。
-3. RokidにUSB接続の確認が出た場合は許可します。
+2. `Rokid Control`を開きます。
+3. RokidにUSB接続の確認が表示された場合は許可します。
 4. MacにRokidの画面が表示されたら、ケーブルを外して使えます。
-
-従来の`Rokid操作【Wi-Fi・マウス・キーボード】.command`は、緊急時の予備としてそのまま残ります。
-
-### macOSにセットアップを止められたとき
-
-ダウンロードした`セットアップ.command`は、初回にmacOSの許可が必要になる場合があります。
-
-「Appleは、Macに損害を与えたり、プライバシーを侵害する可能性のあるマルウェアが含まれていないことを検証できませんでした」と表示されたら、次の手順で許可します。
-
-1. 「ゴミ箱に入れる」は押さず、「完了」を押します。
-2. Macのメニューから「システム設定」を開きます。
-3. 左側の「プライバシーとセキュリティ」を選び、下へスクロールします。
-4. 「セキュリティ」に表示されたファイルの「開く」を押します。
-5. 確認画面で「このまま開く」を押し、Macのログインパスワードを入力します。
-
-許可ボタンは、ファイルを開こうとしてから約1時間表示されます。詳しくは[Apple公式の説明](https://support.apple.com/ja-jp/guide/mac-help/mh40617/mac)を参照してください。
-
-処理後に「プロセスが完了しました」と表示されてもTerminalのウィンドウが残る場合は、左上の赤い閉じるボタン、または`⌘W`で閉じてください。
-
-### キーボード操作の許可
-
-初回起動時にMacの「アクセシビリティ」設定が開いた場合は、一覧の「Rokid Control」をオンにします。最初の案内を閉じたあと、Dockの「Rokid Control」をもう一度クリックしてください。
 
 ## 普段の使い方
 
 1. MacとRokidを同じWi-Fiへつなぎます。
-2. Dockの「Rokid Control」をクリックします。
-3. MacにRokidの画面が表示されます。
+2. `Rokid Control`を開きます。
+3. 表示されたRokidの画面を1回クリックして操作します。
 
-普段は開発用ケーブルをつなぐ必要はありません。
+普段は開発用5ピンケーブルをつなぐ必要はありません。
 
-Rokidを再起動した後は、Rokidで「Wi-Fi ON」を開いてから、Dockの「Rokid Control」をクリックします。それでも画面が開かない場合だけ、開発用5ピンケーブルを一度つないで再実行してください。
+Rokidを再起動した後は、Rokidで「Wi-Fi ON」を一度開いてから`Rokid Control`を起動します。それでも接続できない場合だけ、開発用5ピンケーブルをつないで再実行してください。
 
 ## キーボード操作
 
-Rokidの画面を表示しているウィンドウを1回クリックし、最前面にしてから操作します。
-ほかのアプリやウィンドウを使っている間、キーはRokidへ送られず、Macの通常操作になります。
+Rokidの画面を1回クリックし、一番手前にしてから操作します。ほかのアプリを使っている間、キーはMacの通常操作になります。
 
 | キー | 動作 |
 | --- | --- |
@@ -111,57 +68,68 @@ Rokidの画面を表示しているウィンドウを1回クリックし、最�
 
 ## Wi-Fiの自動復旧
 
-このツールを開いている間は、RokidがWi-Fiをオフにしても自動でオンに戻し、Macへの接続と画面表示を復旧します。
+`Rokid Control`を開いている間は、RokidのWi-Fiが一時的に切れても接続と画面表示を自動で復旧します。
 
-普通の自動復旧は裏側で行われます。白いWi-Fi設定画面が表示されるのは、起動時にWi-Fiが完全にオフで、開発用ケーブルから復旧する場合だけです。
+Rokidの画面を閉じると自動復旧も終了し、Rokid本来の省電力動作へ戻ります。
 
-MacのRokid画面ウィンドウを閉じると、自動復旧も終了し、Rokid本来の省電力動作に戻ります。
-
-このツールを開く前からWi-Fiが完全にオフの場合は、別公開の[Wi-Fi ON](https://github.com/ksuzukigh/rokid-wifi-on)を利用できます。最新版をセットアップしてあれば、Rokidの再起動後でも、Wi-Fi ONを開いてからこのツールを起動するだけで、暗号化された接続先を自動検出してMac操作へ戻れます。
+起動前からWi-Fiが完全にオフの場合は、別公開の[Wi-Fi ON](https://github.com/ksuzukigh/rokid-wifi-on)を利用できます。
 
 ## うまく動かないとき
 
-- 画面が開かない：MacとRokidが同じWi-Fiにつながっているか確認します。改善しない場合は、開発用5ピンケーブルをつないで再実行します。
-- キーが動かない：Rokidの画面ウィンドウをクリックし、一番手前にします。改善しない場合は、「システム設定」→「プライバシーとセキュリティ」→「アクセシビリティ」で「Rokid Control」がオンか確認します。
-- 「RokidをUSBで認識できません」と出る：開発用5ピンケーブルを抜き差しし、Rokid側に許可画面が出ていないか確認します。
-- Terminalが残る：「プロセスが完了しました」と出た後は、左上の赤いボタンまたは`⌘W`で閉じられます。
-
-## プライバシーと安全性
-
-- 画面と操作データは、MacとRokidの間を同じWi-Fi内で直接送受信します。クラウドサービスは使いません。
-- 前回接続したRokidのWi-Fiアドレスは、ダウンロードしたフォルダ内の非公開ファイルに保存されます。GitHubへは送られません。
-- 信頼できる自宅などのWi-Fiで使用してください。
+- 画面が開かない：MacとRokidが同じWi-Fiにつながっているか確認します。Rokidで「Wi-Fi ON」を開いてから再実行します。
+- それでも接続できない：開発用5ピンケーブルをつなぎ、Rokid側のUSB接続確認を許可して再実行します。
+- キーが動かない：Rokidの画面をクリックして一番手前にします。改善しない場合は、Macの「システム設定」→「プライバシーとセキュリティ」→「アクセシビリティ」で`Rokid Control`がオンか確認します。
+- 黒い`exec`がDockに出る：旧版の履歴です。最新版では画面表示部がDockへ別表示されません。
 
 ## 終了と削除
 
-Rokidの画面ウィンドウを閉じれば、「Rokid Control」アプリ、キーボード操作、Wi-Fi自動復旧もまとめて終了します。
+Rokidの画面を閉じると、画面表示、キーボード操作、Wi-Fi自動復旧がまとめて終了します。
 
-このツール自体を削除する場合は、Rokid画面を閉じてから、「アプリケーション」フォルダの「Rokid Control」と、ダウンロードしたフォルダをゴミ箱へ入れます。セットアップ時に入れたHomebrew共通ツールは、他のアプリも使っている可能性があるため自動削除しません。
+削除する場合は、Rokidの画面を閉じてから「アプリケーション」フォルダの`Rokid Control`をゴミ箱へ入れます。
+
+接続先の記録も消す場合は、`ホーム`→`ライブラリ`→`Application Support`→`Rokid Control`フォルダを削除します。
+
+## プライバシー
+
+- 画面と操作データは、同じWi-Fi内のMacとRokidの間で直接送受信します。
+- クラウドサービスへ画面や操作データを送りません。
+- 前回接続したRokidの接続先はMac内だけに保存します。
 
 ## 対応状況
 
-Rokid Glasses RV101の実機で、Wi-Fi接続・画面表示・マウス・キーボード操作・Wi-Fi自動復旧を確認しています。他のRokid製品での動作は未確認です。
+Rokid Glasses RV101の実機で、次の項目を確認しています。
 
-写真をMacへ直接送りたい場合は、別公開の[Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)を使えます。
+- DMGからのインストール
+- HomebrewとPythonを使わない起動
+- Wi-Fi接続と再接続
+- Rokid再起動後の接続先変更への追従
+- 画面表示、マウス、キーボード操作
+- Dockへ不要な黒いアイコンを表示しないこと
+- 終了後に接続処理を残さないこと
+
+他のRokid製品での動作は未確認です。
+
+写真をMacへ直接送りたい場合は、別公開の[Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)を利用できます。
 
 ## 参考と謝辞
 
-このツールは、bcefghjさんが公開している[rokid-glasses-control](https://github.com/bcefghj/rokid-collection/tree/main/rokid-glasses-control)を参考に開発しました。macOS上でADBとscrcpyを組み合わせ、pynputでキーボード操作をRokidへ送るという基本構成を学ばせていただきました。貴重な成果を公開してくださったbcefghjさんに感謝します。
+このツールは、bcefghjさんが公開している[rokid-glasses-control](https://github.com/bcefghj/rokid-collection/tree/main/rokid-glasses-control)を参考に開発しました。
 
-本ツールではRokid Glasses RV101の実機動作に合わせ、ホーム画面用キー操作、Wi-Fiの自動復旧、接続設定、キーボードの誤送信防止などを追加・調整しています。
+本アプリには、[scrcpy](https://github.com/Genymobile/scrcpy)とAndroid Platform ToolsのADBを同梱しています。ライセンスと著作権表示はアプリ内の`Licenses`フォルダに収録しています。
 
 <details>
 <summary>開発者向け情報</summary>
 
-### 使用するソフト
+### ビルド
 
-- Android Platform Tools / ADB
-- scrcpy
-- Python 3
-- pynput / PyObjC
+Xcode Command Line Toolsが入ったMacで、次を実行します。
 
-RV101のホーム画面は画面スワイプではなく、`KEYCODE_DPAD_LEFT`と`KEYCODE_DPAD_RIGHT`で移動します。
+```sh
+./build_dmg.sh
+```
 
-Wi-Fi監視は操作ツールの稼働中だけRokid側で動き、Macからの合図が20秒間途絶えると自動終了します。
+初回は公式scrcpy 4.1のmacOS版をダウンロードし、SHA-256を照合します。完成したアプリとDMGは`build`フォルダへ作成されます。
+
+アプリ本体とキーボード制御はSwiftで実装しています。ADB、scrcpy、scrcpy-serverはアプリ内のファイルだけを使用します。
 
 </details>

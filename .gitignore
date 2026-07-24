@@ -3,4 +3,8 @@
 .venv-rokid-keyboard/
 __pycache__/
 *.pyc
-
+build/
+vendor/extracted-aarch64/
+vendor/extracted-x86_64/
+vendor/*.tar.gz
+vendor/*.part

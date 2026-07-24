@@ -4,6 +4,8 @@ HEARTBEAT_FILE="/data/local/tmp/rokid_mac_control_heartbeat"
 PID_FILE="/data/local/tmp/rokid_mac_wifi_watchdog.pid"
 LOG_FILE="/data/local/tmp/rokid_mac_wifi_watchdog.log"
 MAX_HEARTBEAT_AGE="${1:-20}"
+KEEP_AWAKE_INTERVAL=10
+last_keep_awake_epoch=0
 
 cleanup() {
     rm -f "$PID_FILE"
@@ -33,6 +35,16 @@ while true; do
     if [ "$heartbeat_age" -gt "$MAX_HEARTBEAT_AGE" ]; then
         printf '%s heartbeat expired; watchdog stopped\n' "$(date '+%H:%M:%S')" >> "$LOG_FILE"
         exit 0
+    fi
+
+    # Mac操作中は画面消灯による本体スリープとWi-Fi瞬断を防ぐ。
+    # KEYCODE_UNKNOWNはユーザーの選択や画面上の項目を変更せず、
+    # 無操作タイマーだけを更新する。設定値は変更しない。
+    keep_awake_age=$((now_epoch - last_keep_awake_epoch))
+    if [ "$keep_awake_age" -ge "$KEEP_AWAKE_INTERVAL" ]; then
+        input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
+        input keyevent KEYCODE_UNKNOWN >/dev/null 2>&1
+        last_keep_awake_epoch="$now_epoch"
     fi
 
     wifi_state="$(cmd wifi status 2>/dev/null | sed -n '1p')"
