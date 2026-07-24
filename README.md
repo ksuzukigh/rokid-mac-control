@@ -1,8 +1,8 @@
 # Rokid Control
 
-Rokid Glasses RV101の画面をMacに表示し、マウスとキーボードで操作するアプリです。
+Rokid AI Glasses RV101の画面をMacに表示し、マウスとキーボードで操作するアプリです。
 
-![MacからRokid Glassesを操作するイメージ](docs/images/mac-control-overview.png)
+![MacからRokid AI Glassesを操作するイメージ](docs/images/mac-control-overview.png)
 
 ## できること
 
@@ -10,7 +10,16 @@ Rokid Glasses RV101の画面をMacに表示し、マウスとキーボードで�
 - MacのマウスとキーボードでRokidを操作
 - Wi-Fi接続と開発用USB接続の両方に対応
 
-Apple SiliconとIntelの両方のMacに対応しています。対応OSはmacOS 11以降です。
+## あらかじめ用意するもの
+
+- Rokid AI Glasses RV101
+- macOS 11以降のMac
+- 開発用USBケーブル（5ピン）
+- MacとRokidを接続するWi-Fi
+- Rokidのスマホアプリを入れたスマートフォン
+- Rokid用アプリ「[Wi-Fi ON](https://github.com/ksuzukigh/rokid-wifi-on)」
+
+MacはApple SiliconとIntelの両方に対応しています。「Wi-Fi ON」は、Rokidを再起動した後にWi-Fiをオンへ戻すために使います。
 
 ## ダウンロード
 
@@ -29,12 +38,13 @@ Apple SiliconとIntelの両方のMacに対応しています。対応OSはmacOS 
 
 ## 最初の接続
 
-最初のインストール前に、Rokidのスマホアプリで開発者モードを有効にしておきます。
+初回だけ、MacとRokidの接続準備に開発用USBケーブル（5ピン）を使います。
 
-1. MacとRokidを開発用5ピンケーブルでつなぎます。
-2. `Rokid Control`を開きます。
-3. RokidにUSB接続の確認が表示された場合は許可します。
-4. MacにRokidの画面が表示されたら、ケーブルを外して使えます。
+1. Rokidのスマホアプリで開発者モードを有効にします。
+2. MacとRokidを開発用USBケーブル（5ピン）でつなぎます。
+3. `Rokid Control`を開きます。
+4. RokidにUSB接続の確認が表示された場合は許可します。
+5. MacにRokidの画面が表示されたら、ケーブルを外して使えます。
 
 ## 普段の使い方
 
@@ -44,7 +54,14 @@ Apple SiliconとIntelの両方のMacに対応しています。対応OSはmacOS 
 
 普段は開発用5ピンケーブルをつなぐ必要はありません。
 
-Rokidを再起動した後は、Rokidで「Wi-Fi ON」を一度開いてから`Rokid Control`を起動します。それでも接続できない場合だけ、開発用5ピンケーブルをつないで再実行してください。
+## Rokidを再起動した後
+
+Rokidを再起動すると、Wi-Fiがオフになっていることがあります。「Wi-Fi ON」は、RokidのWi-Fiをオンへ戻すための別アプリです。
+
+1. Rokidで「Wi-Fi ON」を開きます。
+2. Macで`Rokid Control`を開きます。
+
+「Wi-Fi ON」をまだ入れていない場合や、それでも接続できない場合は、開発用USBケーブル（5ピン）をつないで`Rokid Control`を開いてください。
 
 ## キーボード操作
 
@@ -67,14 +84,13 @@ Rokidの画面を1回クリックし、一番手前にしてから操作しま�
 
 Rokidの画面を閉じると自動復旧も終了し、Rokid本来の省電力動作へ戻ります。
 
-起動前からWi-Fiが完全にオフの場合は、別公開の[Wi-Fi ON](https://github.com/ksuzukigh/rokid-wifi-on)を利用できます。
+`Rokid Control`を開く前からWi-Fiがオフの場合は、「Wi-Fi ON」を開くか、開発用USBケーブル（5ピン）をつないでください。
 
 ## うまく動かないとき
 
 - 画面が開かない：MacとRokidが同じWi-Fiにつながっているか確認します。Rokidで「Wi-Fi ON」を開いてから再実行します。
 - それでも接続できない：開発用5ピンケーブルをつなぎ、Rokid側のUSB接続確認を許可して再実行します。
 - キーが動かない：Rokidの画面をクリックして一番手前にします。改善しない場合は、Macの「システム設定」→「プライバシーとセキュリティ」→「アクセシビリティ」で`Rokid Control`がオンか確認します。
-- 黒い`exec`がDockに出る：旧版の履歴です。最新版では画面表示部がDockへ別表示されません。
 
 ## 終了と削除
 
@@ -90,21 +106,10 @@ Rokidの画面を閉じると、画面表示、キーボード操作、Wi-Fi自�
 - クラウドサービスへ画面や操作データを送りません。
 - 前回接続したRokidの接続先はMac内だけに保存します。
 
-## 対応状況
+## 関連アプリ
 
-Rokid Glasses RV101の実機で、次の項目を確認しています。
-
-- DMGからのインストール
-- HomebrewとPythonを使わない起動
-- Wi-Fi接続と再接続
-- Rokid再起動後の接続先変更への追従
-- 画面表示、マウス、キーボード操作
-- Dockへ不要な黒いアイコンを表示しないこと
-- 終了後に接続処理を残さないこと
-
-他のRokid製品での動作は未確認です。
-
-写真をMacへ直接送りたい場合は、別公開の[Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)を利用できます。
+- [Wi-Fi ON](https://github.com/ksuzukigh/rokid-wifi-on)：RokidのWi-Fiをオンへ戻します。
+- [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)：Rokidで撮影した写真をMacへ送ります。
 
 ## 参考と謝辞
 

@@ -90,7 +90,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             "--serial", serial,
             "--no-audio",
             "--keyboard=disabled",
-            "--window-title=Rokid Glasses RV101（Mac操作モード）",
+            "--window-title=Rokid AI Glasses RV101（Mac操作モード）",
         ]
         configuration.environment = environment
         configuration.activates = true
