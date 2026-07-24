@@ -2,8 +2,6 @@
 
 Rokid Glasses RV101の画面をMacに表示し、マウスとキーボードで操作するアプリです。
 
-HomebrewやPythonの準備は不要です。DMGを開いて、普通のMacアプリと同じようにインストールできます。
-
 ![MacからRokid Glassesを操作するイメージ](docs/images/mac-control-overview.png)
 
 ## できること
