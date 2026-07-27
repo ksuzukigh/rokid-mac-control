@@ -1,6 +1,6 @@
 # Rokid Control
 
-Rokid AI Glasses RV101の文字やアイコンをMacに表示し、Macのマウスとキーボードで操作するアプリです。Rokidのカメラ映像を背景にした、装着者の視界に近い表示も選べます。
+Rokid AI Glasses RV101の文字やアイコンをMacに表示し、Macのマウスとキーボードで操作するアプリです。Rokidのカメラが捉えた映像を背景にした表示も選べます。
 
 ![MacからRokid AI Glassesを操作するイメージ](docs/images/mac-control-overview.png)
 
@@ -21,6 +21,8 @@ Rokid AI Glasses RV101の文字やアイコンをMacに表示し、Macのマウ�
 カメラの映像を背景にして、Rokidの文字やアイコンを重ねて表示します。
 
 ![ライブ映像を背景にしてRokidの文字やアイコンを表示した例](docs/images/rokid-control-live-view.png)
+
+この画面は、Rokidをかけた人が実際に見ている視界そのものではありません。Rokidのカメラが捉えた範囲（視界の一部）に、文字やアイコンをMac上で重ねたものです。
 
 ### 背景なし（省電力）
 
