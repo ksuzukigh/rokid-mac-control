@@ -16,7 +16,17 @@ Rokid AI Glasses RV101の文字やアイコンをMacに表示し、Macのマウ�
 - Wi-Fi接続と開発用USB接続の両方に対応
 - Photo to Macの撮影後にライブ映像を自動復帰
 
-![Rokidのアプリ画面をMacに表示した例](docs/images/rokid-control-connected.png)
+### ライブ映像
+
+カメラの映像を背景にして、Rokidの文字やアイコンを重ねて表示します。
+
+![ライブ映像を背景にしてRokidの文字やアイコンを表示した例](docs/images/rokid-control-live-view.png)
+
+### 背景なし（省電力）
+
+ライブ映像を使わず、黒い背景にRokidの文字やアイコンを表示します。電池消費を抑えたいときに適しています。
+
+![背景なし（省電力）でRokidの文字やアイコンを表示した例](docs/images/rokid-control-connected.png)
 
 ## あらかじめ用意するもの
 
