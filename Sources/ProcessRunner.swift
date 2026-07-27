@@ -1,5 +1,22 @@
 import Foundation
 
+private final class LockedDataBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ newData: Data) {
+        lock.lock()
+        data.append(newData)
+        lock.unlock()
+    }
+
+    func snapshot() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+
 struct CommandResult {
     let status: Int32
     let output: String
@@ -30,9 +47,23 @@ final class ProcessRunner {
         process.standardOutput = pipe
         process.standardError = pipe
 
+        let collected = LockedDataBuffer()
+        let outputHandle = pipe.fileHandleForReading
+        outputHandle.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            collected.append(data)
+        }
+
+        let terminationSemaphore = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            terminationSemaphore.signal()
+        }
+
         do {
             try process.run()
         } catch {
+            outputHandle.readabilityHandler = nil
             return CommandResult(
                 status: -1,
                 output: error.localizedDescription,
@@ -40,26 +71,24 @@ final class ProcessRunner {
             )
         }
 
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-
-        var timedOut = false
-        if process.isRunning {
-            timedOut = true
+        let timedOut = terminationSemaphore.wait(
+            timeout: .now() + timeout
+        ) == .timedOut
+        if timedOut {
             process.terminate()
-            let terminationDeadline = Date().addingTimeInterval(0.5)
-            while process.isRunning && Date() < terminationDeadline {
-                Thread.sleep(forTimeInterval: 0.05)
-            }
-            if process.isRunning {
+            if terminationSemaphore.wait(
+                timeout: .now() + 0.5
+            ) == .timedOut {
                 kill(process.processIdentifier, SIGKILL)
+                _ = terminationSemaphore.wait(timeout: .now() + 1)
             }
         }
 
         process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        outputHandle.readabilityHandler = nil
+        let remaining = outputHandle.readDataToEndOfFile()
+        collected.append(remaining)
+        let data = collected.snapshot()
         return CommandResult(
             status: process.terminationStatus,
             output: String(data: data, encoding: .utf8) ?? "",

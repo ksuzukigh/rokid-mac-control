@@ -5,29 +5,50 @@ import Foundation
 final class KeyboardController {
     private let connection: RokidConnectionManager
     private let logger: AppLogger
+    private let scrcpyAppURL: URL
     private let actionQueue = DispatchQueue(label: "RokidControl.KeyboardActions")
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var pendingSpace: DispatchWorkItem?
+    private let screenSizeLock = NSLock()
     private var width = 480
     private var height = 640
     private let targetPIDLock = NSLock()
     private var scrcpyProcessIdentifier: pid_t?
+    var onActivate: (() -> Void)?
+    var onQuit: (() -> Void)?
 
-    init(connection: RokidConnectionManager, logger: AppLogger) {
+    init(
+        connection: RokidConnectionManager,
+        logger: AppLogger,
+        scrcpyAppURL: URL
+    ) {
         self.connection = connection
         self.logger = logger
+        self.scrcpyAppURL = scrcpyAppURL.standardizedFileURL
     }
 
-    func updateScreenSize() {
+    @discardableResult
+    func updateScreenSize() -> (Int, Int) {
         let size = connection.getScreenSize()
+        screenSizeLock.lock()
         width = size.0
         height = size.1
-        logger.log("画面サイズ \(width)x\(height)")
+        screenSizeLock.unlock()
+        logger.log("画面サイズ \(size.0)x\(size.1)")
+        return size
+    }
+
+    func currentScreenSize() -> (Int, Int) {
+        screenSizeLock.lock()
+        defer { screenSizeLock.unlock() }
+        return (width, height)
     }
 
     func start() -> Bool {
         let mask = (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << CGEventType.rightMouseDown.rawValue)
             | (1 << CGEventType.tapDisabledByTimeout.rawValue)
             | (1 << CGEventType.tapDisabledByUserInput.rawValue)
         let callback: CGEventTapCallBack = {
@@ -41,6 +62,8 @@ final class KeyboardController {
             return controller.handle(type: type, event: event)
         }
 
+        // The event tap stores an unretained pointer. RokidControlApp must call
+        // stop() before releasing this controller.
         eventTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -94,6 +117,18 @@ final class KeyboardController {
             return Unmanaged.passUnretained(event)
         }
 
+        if type == .leftMouseDown || type == .rightMouseDown {
+            // During a click, eventTargetUnixProcessID may still identify the
+            // previously active app. Use the actual frontmost window under the
+            // pointer so covered scrcpy regions do not steal focus.
+            if pointTargetsScrcpyWindow(event.location) {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onActivate?()
+                }
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
         guard type == .keyDown else {
             return Unmanaged.passUnretained(event)
         }
@@ -105,15 +140,26 @@ final class KeyboardController {
         }
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        if keyCode == 12, event.flags.contains(.maskCommand) {
+            DispatchQueue.main.async { [weak self] in
+                self?.onQuit?()
+            }
+            return nil
+        }
         let shiftPressed = event.flags.contains(.maskShift)
+        let screenSize = currentScreenSize()
 
         let handled: Bool
         switch keyCode {
         case 123:
-            shiftPressed ? openBottomIcon(offset: -(width / 15)) : keyEvent("KEYCODE_DPAD_LEFT")
+            shiftPressed
+                ? wakeAndTapCenterRow(offsetX: -(screenSize.0 / 15))
+                : keyEvent("KEYCODE_DPAD_LEFT")
             handled = true
         case 124:
-            shiftPressed ? openBottomIcon(offset: width / 15) : keyEvent("KEYCODE_DPAD_RIGHT")
+            shiftPressed
+                ? wakeAndTapCenterRow(offsetX: screenSize.0 / 15)
+                : keyEvent("KEYCODE_DPAD_RIGHT")
             handled = true
         case 49:
             handleSpace()
@@ -125,7 +171,7 @@ final class KeyboardController {
             keyEvent("KEYCODE_BACK")
             handled = true
         case 4:
-            openBottomIcon(offset: 0)
+            wakeAndTapCenterRow(offsetX: 0)
             handled = true
         default:
             handled = false
@@ -149,9 +195,51 @@ final class KeyboardController {
         guard let application = NSRunningApplication(processIdentifier: pid) else {
             return false
         }
-        let executable = application.executableURL?.lastPathComponent.lowercased()
-        let name = application.localizedName?.lowercased()
-        return executable == "scrcpy" || name == "scrcpy"
+        return application.bundleURL?.standardizedFileURL == scrcpyAppURL
+    }
+
+    private func pointTargetsScrcpyWindow(_ point: CGPoint) -> Bool {
+        targetPIDLock.lock()
+        let currentScrcpyPID = scrcpyProcessIdentifier
+        targetPIDLock.unlock()
+        guard let currentScrcpyPID else { return false }
+
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return false
+        }
+        // CGWindowList is ordered front to back. Only the first normal,
+        // visible window under the pointer is the window the user clicked.
+        for window in windows {
+            guard
+                let layer = window[kCGWindowLayer as String] as? NSNumber,
+                layer.intValue == 0,
+                let boundsDictionary = window[
+                    kCGWindowBounds as String
+                ] as? NSDictionary,
+                let bounds = CGRect(
+                    dictionaryRepresentation:
+                        boundsDictionary as CFDictionary
+                ),
+                bounds.contains(point)
+            else {
+                continue
+            }
+            if let alpha = window[
+                kCGWindowAlpha as String
+            ] as? NSNumber, alpha.doubleValue <= 0 {
+                continue
+            }
+            guard let owner = window[
+                kCGWindowOwnerPID as String
+            ] as? NSNumber else {
+                return false
+            }
+            return owner.int32Value == currentScrcpyPID
+        }
+        return false
     }
 
     private func keyEvent(_ androidKey: String) {
@@ -165,9 +253,10 @@ final class KeyboardController {
         }
     }
 
-    private func openBottomIcon(offset: Int) {
+    private func wakeAndTapCenterRow(offsetX: Int) {
         actionQueue.async { [weak self] in
             guard let self else { return }
+            let screenSize = currentScreenSize()
             let serial = connection.currentSerial()
             _ = connection.runADB([
                 "-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP",
@@ -178,9 +267,9 @@ final class KeyboardController {
             Thread.sleep(forTimeInterval: 0.35)
             _ = connection.runADB([
                 "-s", serial, "shell", "input", "tap",
-                "\(width / 2 + offset)", "\(height / 2)",
+                "\(screenSize.0 / 2 + offsetX)", "\(screenSize.1 / 2)",
             ])
-            logger.log("下段アイコン offset=\(offset)")
+            logger.log("中央行タップ offsetX=\(offsetX)")
         }
     }
 
@@ -204,10 +293,11 @@ final class KeyboardController {
     private func tapCenter() {
         actionQueue.async { [weak self] in
             guard let self else { return }
+            let screenSize = currentScreenSize()
             let serial = connection.currentSerial()
             _ = connection.runADB([
                 "-s", serial, "shell", "input", "tap",
-                "\(width / 2)", "\(height / 2)",
+                "\(screenSize.0 / 2)", "\(screenSize.1 / 2)",
             ])
             logger.log("中央タップ")
         }
@@ -216,10 +306,11 @@ final class KeyboardController {
     private func doubleTapCenter() {
         actionQueue.async { [weak self] in
             guard let self else { return }
+            let screenSize = currentScreenSize()
             let serial = connection.currentSerial()
             let arguments = [
                 "-s", serial, "shell", "input", "tap",
-                "\(width / 2)", "\(height / 2)",
+                "\(screenSize.0 / 2)", "\(screenSize.1 / 2)",
             ]
             _ = connection.runADB(arguments)
             Thread.sleep(forTimeInterval: 0.08)

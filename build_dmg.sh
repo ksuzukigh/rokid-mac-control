@@ -36,6 +36,7 @@ INTEL_BINARY="$BUILD/Rokid Control-x86_64"
 
 xcrun swiftc \
     -O \
+    -swift-version 5 \
     -parse-as-library \
     -target arm64-apple-macos12.3 \
     -framework AppKit \
@@ -49,6 +50,7 @@ xcrun swiftc \
 
 xcrun swiftc \
     -O \
+    -swift-version 5 \
     -parse-as-library \
     -target x86_64-apple-macos12.3 \
     -framework AppKit \
@@ -74,6 +76,7 @@ cp "$VENDOR/extracted-aarch64/scrcpy-server" "$APP_RESOURCES/scrcpy-server"
 cp "$RESOURCES/RokidControl-Info.plist" "$CONTENTS/Info.plist"
 cp "$RESOURCES/rokid_wifi_watchdog.sh" "$APP_RESOURCES/rokid_wifi_watchdog.sh"
 cp "$RESOURCES/RokidGlasses.icns" "$APP_RESOURCES/RokidGlasses.icns"
+cp "$ROOT/LICENSE" "$LICENSES/Rokid-Control-LICENSE"
 cp "$RESOURCES/THIRD-PARTY-NOTICES.md" "$LICENSES/THIRD-PARTY-NOTICES.md"
 cp "$VENDOR/extracted-aarch64/LICENSE" "$LICENSES/scrcpy-LICENSE"
 cp \
@@ -90,7 +93,6 @@ codesign --force --sign - "$BIN/adb"
 codesign --force --sign - "$SCRCPY_APP"
 codesign \
     --force \
-    --deep \
     --sign - \
     --requirements '=designated => identifier "io.github.ksuzukigh.rokid-mac-control"' \
     "$APP"

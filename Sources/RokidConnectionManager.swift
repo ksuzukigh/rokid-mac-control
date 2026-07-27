@@ -5,6 +5,7 @@ enum RokidConnectionError: LocalizedError {
     case noDevice
     case wifiUnavailable
     case watchdogFailed
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -16,6 +17,8 @@ enum RokidConnectionError: LocalizedError {
             return "RokidをWi-Fiへ接続できませんでした。"
         case .watchdogFailed:
             return "Mac操作中のWi-Fi監視を開始できませんでした。"
+        case .cancelled:
+            return "接続をキャンセルしました。"
         }
     }
 }
@@ -62,33 +65,52 @@ final class RokidConnectionManager {
         _ = adb(["start-server"], timeout: 8)
     }
 
-    func connectForStartup() throws -> String {
+    func connectForStartup(
+        onProgress: (String) -> Void = { _ in },
+        isCancelled: () -> Bool = { false }
+    ) throws -> String {
+        try checkCancellation(isCancelled)
+        onProgress("Rokidを探しています…")
         // A connected development cable is the most stable path and does not
         // require changing the glasses' Wi-Fi state.
         if let usbSerial = findUSBDevice() {
+            onProgress("Rokidに接続しています…")
             return useUSB(usbSerial)
         }
 
+        try checkCancellation(isCancelled)
         if let saved = readSavedAddress(), connect(saved) {
+            onProgress("Rokidに接続しています…")
             if isRokidDevice(saved) {
                 return use(saved)
             }
             rejectWiFiDevice(saved, removeSavedAddress: true)
         }
 
-        if let discovered = connectToDiscoveredRokid() {
+        try checkCancellation(isCancelled)
+        if let discovered = connectToDiscoveredRokid(
+            onProgress: onProgress
+        ) {
             return discovered
         }
 
         logger.log("Wi-Fi接続またはUSB接続を待っています")
         let deadline = Date().addingTimeInterval(60)
         while Date() < deadline {
-            if let discovered = connectToDiscoveredRokid() {
+            try checkCancellation(isCancelled)
+            onProgress("Rokidを探しています…")
+            if let discovered = connectToDiscoveredRokid(
+                onProgress: onProgress
+            ) {
                 return discovered
             }
 
             if let usbSerial = findUSBDevice() {
-                return try recoverWiFiUsingUSB(usbSerial)
+                onProgress("Rokidに接続しています…")
+                return try recoverWiFiUsingUSB(
+                    usbSerial,
+                    isCancelled: isCancelled
+                )
             }
             Thread.sleep(forTimeInterval: 1)
         }
@@ -96,13 +118,18 @@ final class RokidConnectionManager {
         throw RokidConnectionError.noDevice
     }
 
-    func reconnect() -> String? {
+    func reconnect(
+        isCancelled: () -> Bool = { false }
+    ) -> String? {
         var oldSerial = currentSerial()
         if !oldSerial.isEmpty && oldSerial.contains(":") {
             _ = adb(["disconnect", oldSerial], timeout: 3)
         }
 
         for _ in 0..<20 {
+            if isCancelled() {
+                return nil
+            }
             if let usbSerial = findUSBDevice() {
                 return useUSB(usbSerial)
             }
@@ -136,6 +163,9 @@ final class RokidConnectionManager {
             let width = Int(result.output[widthRange]),
             let height = Int(result.output[heightRange])
         else {
+            logger.log(
+                "画面サイズの取得に失敗したため480x640を使用 output=\(result.output)"
+            )
             return (480, 640)
         }
         return (width, height)
@@ -193,7 +223,7 @@ final class RokidConnectionManager {
         let timer = DispatchSource.makeTimerSource(
             queue: DispatchQueue(label: "RokidControl.Heartbeat")
         )
-        timer.schedule(deadline: .now(), repeating: 2)
+        timer.schedule(deadline: .now(), repeating: 5)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             let address = self.currentSerial()
@@ -210,23 +240,23 @@ final class RokidConnectionManager {
     func stopMacMode() {
         stopHeartbeat()
         let current = currentSerial()
-        guard !current.isEmpty, isConnected(current) else { return }
+        guard !current.isEmpty else { return }
 
-        let pid = adb([
+        let pidResult = adb([
             "-s", current, "shell", "cat", remoteWatchdogPID,
-        ], timeout: 2).output.trimmingCharacters(in: .whitespacesAndNewlines)
+        ], timeout: 1)
+        guard pidResult.succeeded else { return }
+        let pid = pidResult.output.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
         if Int(pid) != nil {
-            _ = adb(["-s", current, "shell", "kill", pid], timeout: 2)
+            _ = adb(["-s", current, "shell", "kill", pid], timeout: 1)
         }
         _ = adb([
             "-s", current, "shell", "rm", "-f",
             remoteHeartbeat, remoteWatchdogPID,
-        ], timeout: 3)
+        ], timeout: 1)
         logger.log("Mac操作モード終了")
-    }
-
-    func shutdownADBServer() {
-        _ = adb(["kill-server"], timeout: 5)
     }
 
     func runADB(_ arguments: [String], timeout: TimeInterval = 5) -> CommandResult {
@@ -299,8 +329,11 @@ final class RokidConnectionManager {
         return nil
     }
 
-    private func connectToDiscoveredRokid() -> String? {
+    private func connectToDiscoveredRokid(
+        onProgress: (String) -> Void = { _ in }
+    ) -> String? {
         for address in discoverSecureWiFi() {
+            onProgress("Rokidに接続しています…")
             guard connect(address) else { continue }
             if isRokidDevice(address) {
                 return use(address)
@@ -379,7 +412,11 @@ final class RokidConnectionManager {
         return addresses
     }
 
-    private func recoverWiFiUsingUSB(_ usbSerial: String) throws -> String {
+    private func recoverWiFiUsingUSB(
+        _ usbSerial: String,
+        isCancelled: () -> Bool = { false }
+    ) throws -> String {
+        try checkCancellation(isCancelled)
         guard isRokidDevice(usbSerial) else {
             throw RokidConnectionError.noDevice
         }
@@ -425,6 +462,7 @@ final class RokidConnectionManager {
 
         var ipAddress = ""
         for _ in 0..<20 {
+            try checkCancellation(isCancelled)
             status = adb([
                 "-s", usbSerial, "shell", "cmd", "wifi", "status",
             ], timeout: 5).output
@@ -456,6 +494,7 @@ final class RokidConnectionManager {
         _ = adb(["-s", usbSerial, "tcpip", "5555"], timeout: 8)
         Thread.sleep(forTimeInterval: 2)
         for _ in 0..<10 {
+            try checkCancellation(isCancelled)
             if connect(address) {
                 if isRokidDevice(address) {
                     return use(address)
@@ -466,6 +505,14 @@ final class RokidConnectionManager {
             Thread.sleep(forTimeInterval: 1)
         }
         throw RokidConnectionError.noDevice
+    }
+
+    private func checkCancellation(
+        _ isCancelled: () -> Bool
+    ) throws {
+        if isCancelled() {
+            throw RokidConnectionError.cancelled
+        }
     }
 
     private func isRokidDevice(_ address: String) -> Bool {

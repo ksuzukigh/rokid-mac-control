@@ -27,7 +27,7 @@ final class VisionFrameCompositor {
     private let lock = NSLock()
     private let renderQueue = DispatchQueue(label: "RokidVision.Compositor")
     private let context = CIContext(options: [.cacheIntermediates: false])
-    private let outputSize = CGSize(width: 480, height: 640)
+    let outputSize: CGSize
     private var hudVisibility: CGFloat
     private var latestCamera: CVPixelBuffer?
     private var latestHUD: CVPixelBuffer?
@@ -35,7 +35,14 @@ final class VisionFrameCompositor {
 
     var onFrame: ((CGImage) -> Void)?
 
-    init(hudVisibility: Double = 0.55) {
+    init(
+        outputSize: CGSize = CGSize(width: 480, height: 640),
+        hudVisibility: Double = 0.55
+    ) {
+        self.outputSize = CGSize(
+            width: max(outputSize.width.rounded(), 1),
+            height: max(outputSize.height.rounded(), 1)
+        )
         self.hudVisibility = CGFloat(min(max(hudVisibility, 0), 1))
     }
 
@@ -243,18 +250,24 @@ final class VisionCaptureCoordinator {
                 self.streams = [hudStream, cameraStream]
 
                 let group = DispatchGroup()
+                let startErrorLock = NSLock()
                 var startError: Error?
                 for stream in self.streams {
                     group.enter()
                     stream.startCapture { error in
+                        startErrorLock.lock()
                         if startError == nil {
                             startError = error
                         }
+                        startErrorLock.unlock()
                         group.leave()
                     }
                 }
                 group.notify(queue: .main) {
-                    completion(startError)
+                    startErrorLock.lock()
+                    let result = startError
+                    startErrorLock.unlock()
+                    completion(result)
                 }
             } catch {
                 completion(error)
@@ -289,8 +302,8 @@ final class VisionCaptureCoordinator {
     ) throws -> SCStream {
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let configuration = SCStreamConfiguration()
-        configuration.width = 480
-        configuration.height = 640
+        configuration.width = Int(compositor.outputSize.width)
+        configuration.height = Int(compositor.outputSize.height)
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 15)
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.queueDepth = 3
@@ -328,10 +341,24 @@ final class VisionCaptureCoordinator {
 }
 
 final class VisionDisplayView: NSView {
+    private let deviceSize: CGSize
     private var image: CGImage?
     private var status = "Rokidへ接続しています…"
     var onTap: ((Int, Int) -> Void)?
     var onBack: (() -> Void)?
+
+    init(frame frameRect: NSRect, deviceSize: CGSize) {
+        self.deviceSize = CGSize(
+            width: max(deviceSize.width.rounded(), 1),
+            height: max(deviceSize.height.rounded(), 1)
+        )
+        super.init(frame: frameRect)
+    }
+
+    required init?(coder: NSCoder) {
+        deviceSize = CGSize(width: 480, height: 640)
+        super.init(coder: coder)
+    }
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -343,7 +370,7 @@ final class VisionDisplayView: NSView {
             NSGraphicsContext.current?.imageInterpolation = .high
             let nsImage = NSImage(
                 cgImage: image,
-                size: NSSize(width: 480, height: 640)
+                size: deviceSize
             )
             nsImage.draw(
                 in: bounds,
@@ -389,11 +416,15 @@ final class VisionDisplayView: NSView {
     override func mouseDown(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
         guard bounds.width > 0, bounds.height > 0 else { return }
-        let x = Int((location.x / bounds.width * 480).rounded())
-        let y = Int(((1 - location.y / bounds.height) * 640).rounded())
+        let x = Int(
+            (location.x / bounds.width * deviceSize.width).rounded()
+        )
+        let y = Int(
+            ((1 - location.y / bounds.height) * deviceSize.height).rounded()
+        )
         onTap?(
-            min(max(x, 0), 479),
-            min(max(y, 0), 639)
+            min(max(x, 0), Int(deviceSize.width) - 1),
+            min(max(y, 0), Int(deviceSize.height) - 1)
         )
     }
 
