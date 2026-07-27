@@ -1,19 +1,34 @@
 import AppKit
 import ApplicationServices
+import CoreGraphics
 import Foundation
 
 final class RokidControlApp: NSObject, NSApplicationDelegate {
+    private enum DisplayMode {
+        case standard
+        case vision
+    }
+
     private var logger: AppLogger?
     private var runner: ProcessRunner?
     private var connection: RokidConnectionManager?
     private var keyboard: KeyboardController?
     private var scrcpyApplication: NSRunningApplication?
+    private var visionController: VisionModeController?
+    private var visionRecoveryInProgress = false
+    private var displayMode: DisplayMode = .standard
     private var isTerminating = false
     private let workQueue = DispatchQueue(label: "RokidControl.MainWork")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+
+        guard let selectedMode = chooseDisplayMode() else {
+            NSApp.terminate(nil)
+            return
+        }
+        displayMode = selectedMode
 
         guard requestAccessibilityIfNeeded() else {
             showFailure(
@@ -22,10 +37,20 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             )
             return
         }
+        if displayMode == .vision && !requestScreenCaptureIfNeeded() {
+            showFailure(
+                title: "画面収録の許可が必要です",
+                message: "「システム設定」→「プライバシーとセキュリティ」→「画面とシステムオーディオ録音」で「Rokid Control」を許可してから、もう一度起動してください。"
+            )
+            return
+        }
 
         do {
             let logger = try AppLogger()
             self.logger = logger
+            logger.log(
+                "表示モード \(displayMode == .vision ? "視界表示" : "通常表示")"
+            )
             let resources = try locateResources()
             let environment = makeEnvironment(resources: resources)
             let runner = ProcessRunner(environment: environment)
@@ -59,7 +84,24 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
                             )
                         }
                     }
-                    self.launchScrcpy(resources: resources, environment: environment)
+                    switch self.displayMode {
+                    case .standard:
+                        self.launchScrcpy(
+                            resources: resources,
+                            environment: environment
+                        )
+                    case .vision:
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self, !self.isTerminating else { return }
+                            self.startVisionController(
+                                connection: connection,
+                                keyboard: keyboard,
+                                logger: logger,
+                                resources: resources,
+                                environment: environment
+                            )
+                        }
+                    }
                 } catch {
                     self.failFromWorker(
                         title: "Rokid操作を開始できませんでした",
@@ -77,6 +119,36 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         cleanup()
+    }
+
+    private func chooseDisplayMode() -> DisplayMode? {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "背景を選んでください"
+        alert.informativeText =
+            "ライブ映像：カメラの映像を背景に表示します。\n"
+            + "背景なし（省電力）：黒い背景で表示します。ライブ映像は使いません。"
+        alert.addButton(withTitle: "ライブ映像")
+        alert.addButton(withTitle: "背景なし（省電力）")
+        alert.addButton(withTitle: "キャンセル")
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            let warning = NSAlert()
+            warning.alertStyle = .informational
+            warning.messageText = "ライブ映像を開始します"
+            warning.informativeText =
+                "カメラを使用するため、背景なし（省電力）より電池を多く消費します。"
+            warning.addButton(withTitle: "開始")
+            warning.addButton(withTitle: "戻る")
+            return warning.runModal() == .alertFirstButtonReturn
+                ? .vision
+                : chooseDisplayMode()
+        case .alertSecondButtonReturn:
+            return .standard
+        default:
+            return nil
+        }
     }
 
     private func launchScrcpy(
@@ -130,6 +202,98 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
                             environment: environment
                         )
                     }
+                }
+            }
+        }
+    }
+
+    private func startVisionController(
+        connection: RokidConnectionManager,
+        keyboard: KeyboardController,
+        logger: AppLogger,
+        resources: AppResources,
+        environment: [String: String]
+    ) {
+        guard !isTerminating else { return }
+        let controller = VisionModeController(
+            connection: connection,
+            keyboard: keyboard,
+            logger: logger,
+            resources: resources,
+            environment: environment,
+            onClose: { [weak self] in
+                NSApp.terminate(self)
+            },
+            onFailure: { [weak self] title, message in
+                self?.failFromWorker(
+                    title: title,
+                    message: message
+                )
+            },
+            onSourceStopped: { [weak self] in
+                self?.recoverVisionSources(
+                    resources: resources,
+                    environment: environment
+                )
+            }
+        )
+        visionController = controller
+        visionRecoveryInProgress = false
+        controller.start()
+    }
+
+    private func recoverVisionSources(
+        resources: AppResources,
+        environment: [String: String]
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  !self.isTerminating,
+                  !self.visionRecoveryInProgress,
+                  let connection = self.connection,
+                  let keyboard = self.keyboard,
+                  let logger = self.logger
+            else {
+                return
+            }
+            self.visionRecoveryInProgress = true
+            self.visionController?.stop()
+            self.visionController = nil
+            keyboard.updateScrcpyProcessIdentifier(nil)
+            logger.log("視界表示 接続復旧開始")
+
+            self.workQueue.async { [weak self] in
+                guard let self, !self.isTerminating else { return }
+                if !connection.isCurrentConnectionAlive() {
+                    guard connection.reconnect() != nil else {
+                        self.failFromWorker(
+                            title: "Wi-Fi接続を復旧できませんでした",
+                            message: "Rokidで「Wi-Fi ON」を開いてから、もう一度起動してください。"
+                        )
+                        return
+                    }
+                    do {
+                        try self.startMacModeWithRetry()
+                        keyboard.updateScreenSize()
+                    } catch {
+                        self.failFromWorker(
+                            title: "Wi-Fi接続を復旧できませんでした",
+                            message: error.localizedDescription
+                        )
+                        return
+                    }
+                }
+
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.isTerminating else { return }
+                    logger.log("視界表示 接続復旧成功")
+                    self.startVisionController(
+                        connection: connection,
+                        keyboard: keyboard,
+                        logger: logger,
+                        resources: resources,
+                        environment: environment
+                    )
                 }
             }
         }
@@ -264,6 +428,9 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         isTerminating = true
         keyboard?.stop()
         keyboard = nil
+        visionController?.stop()
+        visionController = nil
+        visionRecoveryInProgress = false
 
         if let application = scrcpyApplication, !application.isTerminated {
             application.terminate()
@@ -286,6 +453,14 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
         )
         return false
+    }
+
+    private func requestScreenCaptureIfNeeded() -> Bool {
+        if CGPreflightScreenCaptureAccess() {
+            return true
+        }
+        _ = CGRequestScreenCaptureAccess()
+        return CGPreflightScreenCaptureAccess()
     }
 
     private func locateResources() throws -> AppResources {
@@ -324,7 +499,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         environment["ADB"] = resources.adb.path
         environment["SCRCPY_ICON_DIR"] = resources.scrcpyIcons.path
         environment["SCRCPY_SERVER_PATH"] = resources.server.path
-        environment["ANDROID_ADB_SERVER_PORT"] = "5041"
+        environment["ANDROID_ADB_SERVER_PORT"] = "5037"
         // Keep scrcpy's SDL helper out of the Dock. Rokid Control remains the
         // foreground application and raises the scrcpy window via Accessibility.
         environment["SDL_MAC_BACKGROUND_APP"] = "1"

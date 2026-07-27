@@ -37,18 +37,26 @@ INTEL_BINARY="$BUILD/Rokid Control-x86_64"
 xcrun swiftc \
     -O \
     -parse-as-library \
-    -target arm64-apple-macos11.0 \
+    -target arm64-apple-macos12.3 \
     -framework AppKit \
     -framework ApplicationServices \
+    -framework CoreImage \
+    -framework CoreMedia \
+    -framework CoreVideo \
+    -framework ScreenCaptureKit \
     -o "$ARM_BINARY" \
     "$SOURCES"/*.swift
 
 xcrun swiftc \
     -O \
     -parse-as-library \
-    -target x86_64-apple-macos11.0 \
+    -target x86_64-apple-macos12.3 \
     -framework AppKit \
     -framework ApplicationServices \
+    -framework CoreImage \
+    -framework CoreMedia \
+    -framework CoreVideo \
+    -framework ScreenCaptureKit \
     -o "$INTEL_BINARY" \
     "$SOURCES"/*.swift
 
