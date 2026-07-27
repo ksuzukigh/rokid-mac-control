@@ -344,6 +344,7 @@ final class VisionDisplayView: NSView {
     private let deviceSize: CGSize
     private var image: CGImage?
     private var status = "Rokidへ接続しています…"
+    private var navigationHighlightPoint: CGPoint?
     var onTap: ((Int, Int) -> Void)?
     var onBack: (() -> Void)?
 
@@ -378,6 +379,7 @@ final class VisionDisplayView: NSView {
                 operation: .copy,
                 fraction: 1
             )
+            drawNavigationHighlight()
             return
         }
 
@@ -411,6 +413,40 @@ final class VisionDisplayView: NSView {
         status = text
         image = nil
         needsDisplay = true
+    }
+
+    func showNavigationHighlight(at devicePoint: CGPoint?) {
+        navigationHighlightPoint = devicePoint
+        needsDisplay = true
+    }
+
+    private func drawNavigationHighlight() {
+        guard let point = navigationHighlightPoint else { return }
+        let center = CGPoint(
+            x: point.x / deviceSize.width * bounds.width,
+            y: (1 - point.y / deviceSize.height) * bounds.height
+        )
+        let scale = min(
+            bounds.width / deviceSize.width,
+            bounds.height / deviceSize.height
+        )
+        let diameter = max(44 * scale, 30)
+        let rect = NSRect(
+            x: center.x - diameter / 2,
+            y: center.y - diameter / 2,
+            width: diameter,
+            height: diameter
+        )
+
+        NSColor.black.withAlphaComponent(0.65).setStroke()
+        let outer = NSBezierPath(ovalIn: rect.insetBy(dx: 3, dy: 3))
+        outer.lineWidth = 7
+        outer.stroke()
+
+        NSColor.systemCyan.setStroke()
+        let inner = NSBezierPath(ovalIn: rect.insetBy(dx: 5, dy: 5))
+        inner.lineWidth = 3
+        inner.stroke()
     }
 
     override func mouseDown(with event: NSEvent) {

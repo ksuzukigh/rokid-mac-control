@@ -114,6 +114,21 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         onClose()
     }
 
+    func setNavigationSelection(_ item: LowerNavigationItem?) {
+        let point = item.map {
+            CGPoint(
+                x: deviceSize.width / 2
+                    + CGFloat(
+                        $0.horizontalOffset(
+                            for: Int(deviceSize.width)
+                        )
+                    ),
+                y: deviceSize.height / 2 + deviceSize.height / 60
+            )
+        }
+        displayView?.showNavigationHighlight(at: point)
+    }
+
     private func createVisionWindow() {
         let size = NSSize(
             width: deviceSize.width,
@@ -138,9 +153,11 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         )
         displayView.autoresizingMask = [.width, .height]
         displayView.onTap = { [weak self] x, y in
+            self?.keyboard.resetNavigationMode()
             self?.sendTap(x: x, y: y)
         }
         displayView.onBack = { [weak self] in
+            self?.keyboard.resetNavigationMode()
             self?.sendKey("KEYCODE_BACK")
         }
         window.contentView = displayView
