@@ -16,7 +16,7 @@ Rokid AI Glasses RV101の文字やアイコンをMacに表示し、Macのマウ�
 - 文字やアイコンの見やすさをスライダーで調整
 - MacのマウスとキーボードでRokidを操作
 - Wi-Fi接続と開発用USB接続の両方に対応
-- Photo to Macの撮影後にライブ映像を自動復帰
+- 「Photo to Mac」での撮影後にライブ映像を自動復帰
 
 ### ライブ映像
 
@@ -42,7 +42,7 @@ Rokid AI Glasses RV101の文字やアイコンをMacに表示し、Macのマウ�
 
 Rokid AI Glasses RV101に付属する3ピンのUSBケーブルは充電専用で、Macとの接続には使用できません。開発用USBケーブル（5ピン）は別売です。入手できない場合は、購入した販売店またはRokidの開発者向け窓口へ「RV101用の5ピン開発ケーブル」についてお問い合わせください。
 
-Rokidを再起動した後もUSBケーブルを使わずに接続したい場合は、別アプリの[Wi-Fi ON](https://github.com/ksuzukigh/rokid-wifi-on)もRokidにインストールしておきます。Wi-Fi ONは、再起動後にRokidのWi-Fi接続をオンにするアプリです。
+Rokidを再起動した後もUSBケーブルを使わずに接続したい場合は、別アプリの[Wi-Fi ON](https://github.com/ksuzukigh/rokid-wifi-on)もRokidにインストールしておきます。「Wi-Fi ON」は、再起動後にRokidのWi-Fi接続をオンにするアプリです。
 
 ## Macにインストールする
 
@@ -123,17 +123,17 @@ Macに画面が表示されたら接続完了です。以降はUSBケーブル�
 
 背景を変更する場合は、Rokid Controlを一度終了し、開き直して別の背景を選びます。
 
-Photo to Macで撮影すると、撮影中だけライブ映像が一時停止します。撮影後は自動的にライブ映像へ戻ります。
+「Photo to Mac」で撮影すると、撮影中だけライブ映像が一時停止します。撮影後は自動的にライブ映像へ戻ります。
 
 ## Rokidを再起動した後
 
-Rokidを再起動すると、Wi-Fi接続がオフになることがあります。Wi-Fi ONをインストールしている場合は、次の順番で接続します。
+Rokidを再起動すると、Wi-Fi接続がオフになることがあります。「Wi-Fi ON」をインストールしている場合は、次の順番で接続します。
 
 1. Rokidのアプリ一覧から「Wi-Fi ON」を開きます。
 2. 「Wi-Fiはオンです」と表示されるまで待ちます。
 3. Macで`Rokid Control`を開きます。
 
-Wi-Fi ONをインストールしていない場合や、この手順で接続できない場合は、Rokid専用の開発用USBケーブル（5ピン）でMacとRokidをつないでから`Rokid Control`を開きます。
+「Wi-Fi ON」をインストールしていない場合や、この手順で接続できない場合は、Rokid専用の開発用USBケーブル（5ピン）でMacとRokidをつないでから`Rokid Control`を開きます。
 
 ## キーボード操作
 
@@ -219,8 +219,8 @@ Rokid Controlを終了してから、Macの「アプリケーション」フォ�
 
 ## 関連アプリ
 
-- [Wi-Fi ON](https://github.com/ksuzukigh/rokid-wifi-on)：RokidのWi-Fi接続をオンにします。
-- [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)：Rokidで撮影した写真をMacに送ります。
+- [Wi-Fi ON](https://github.com/ksuzukigh/rokid-wifi-on)：Rokid AI Glasses RV101のWi-Fiを復旧します。
+- [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)：Rokid AI Glasses RV101で撮影した写真をMacへ送ります。
 
 ## 参考と謝辞
 
