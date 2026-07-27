@@ -63,6 +63,12 @@ final class RokidConnectionManager {
     }
 
     func connectForStartup() throws -> String {
+        // A connected development cable is the most stable path and does not
+        // require changing the glasses' Wi-Fi state.
+        if let usbSerial = findUSBDevice() {
+            return useUSB(usbSerial)
+        }
+
         if let saved = readSavedAddress(), connect(saved) {
             return use(saved)
         }
@@ -89,12 +95,15 @@ final class RokidConnectionManager {
 
     func reconnect() -> String? {
         let oldSerial = currentSerial()
-        if !oldSerial.isEmpty {
+        if !oldSerial.isEmpty && oldSerial.contains(":") {
             _ = adb(["disconnect", oldSerial], timeout: 3)
         }
 
         for _ in 0..<20 {
-            if !oldSerial.isEmpty && connect(oldSerial) {
+            if let usbSerial = findUSBDevice() {
+                return useUSB(usbSerial)
+            }
+            if oldSerial.contains(":") && connect(oldSerial) {
                 return use(oldSerial)
             }
             if let discovered = discoverSecureWiFi(), connect(discovered) {
@@ -235,6 +244,14 @@ final class RokidConnectionManager {
         try? Data("\(address)\n".utf8).write(to: addressURL, options: .atomic)
         logger.log("Wi-Fi接続成功 serial=\(address)")
         return address
+    }
+
+    private func useUSB(_ usbSerial: String) -> String {
+        stateLock.lock()
+        serial = usbSerial
+        stateLock.unlock()
+        logger.log("USB接続成功 serial=\(usbSerial)")
+        return usbSerial
     }
 
     private func readSavedAddress() -> String? {
