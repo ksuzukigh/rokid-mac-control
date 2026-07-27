@@ -1,0 +1,32 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  compile-and-test:
+    runs-on: macos-14
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Type-check Apple Silicon
+        run: >-
+          xcrun swiftc -typecheck -swift-version 5 -parse-as-library
+          -target arm64-apple-macos12.3
+          -framework AppKit -framework ApplicationServices
+          -framework CoreImage -framework CoreMedia -framework CoreVideo
+          -framework ScreenCaptureKit Sources/*.swift
+
+      - name: Type-check Intel
+        run: >-
+          xcrun swiftc -typecheck -swift-version 5 -parse-as-library
+          -target x86_64-apple-macos12.3
+          -framework AppKit -framework ApplicationServices
+          -framework CoreImage -framework CoreMedia -framework CoreVideo
+          -framework ScreenCaptureKit Sources/*.swift
+
+      - name: Run self-tests
+        run: ./run_self_test.sh

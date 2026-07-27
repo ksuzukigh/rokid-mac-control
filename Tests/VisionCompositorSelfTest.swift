@@ -20,6 +20,22 @@ enum VisionCompositorSelfTest {
         ) else {
             throw TestError.composition
         }
+        try verify(result, expectedSize: CGSize(width: 480, height: 640))
+
+        let alternateCompositor = VisionFrameCompositor(
+            outputSize: CGSize(width: 320, height: 240),
+            hudVisibility: 0.8
+        )
+        guard let alternate = alternateCompositor.compose(
+            cameraImage: CIImage(cgImage: camera),
+            hudImage: CIImage(cgImage: hud)
+        ) else {
+            throw TestError.composition
+        }
+        try verify(
+            alternate,
+            expectedSize: CGSize(width: 320, height: 240)
+        )
 
         let output = URL(
             fileURLWithPath: CommandLine.arguments.dropFirst().first
@@ -34,6 +50,67 @@ enum VisionCompositorSelfTest {
         }
         try data.write(to: output, options: .atomic)
         print(output.path)
+    }
+
+    private static func verify(
+        _ image: CGImage,
+        expectedSize: CGSize
+    ) throws {
+        guard image.width == Int(expectedSize.width),
+              image.height == Int(expectedSize.height)
+        else {
+            throw TestError.unexpectedSize(image.width, image.height)
+        }
+
+        let bytesPerPixel = 4
+        let rowBytes = image.width * bytesPerPixel
+        var pixels = [UInt8](
+            repeating: 0,
+            count: rowBytes * image.height
+        )
+        let context = CIContext(options: [.cacheIntermediates: false])
+        pixels.withUnsafeMutableBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            context.render(
+                CIImage(cgImage: image),
+                toBitmap: baseAddress,
+                rowBytes: rowBytes,
+                bounds: CGRect(
+                    x: 0,
+                    y: 0,
+                    width: image.width,
+                    height: image.height
+                ),
+                format: .RGBA8,
+                colorSpace: CGColorSpaceCreateDeviceRGB()
+            )
+        }
+
+        var visiblePixels = 0
+        var greenHUDPixels = 0
+        for index in stride(
+            from: 0,
+            to: pixels.count,
+            by: bytesPerPixel
+        ) {
+            let red = Int(pixels[index])
+            let green = Int(pixels[index + 1])
+            let blue = Int(pixels[index + 2])
+            if max(red, green, blue) >= 24 {
+                visiblePixels += 1
+            }
+            if green >= 96, green > red + 24, green > blue + 24 {
+                greenHUDPixels += 1
+            }
+        }
+
+        let totalPixels = image.width * image.height
+        guard visiblePixels > totalPixels / 2 else {
+            throw TestError.outputTooDark(visiblePixels)
+        }
+        guard greenHUDPixels > max(totalPixels / 1_000, 100) else {
+            throw TestError.hudMissing(greenHUDPixels)
+        }
     }
 
     private static func makeCameraImage(size: NSSize) -> CGImage? {
@@ -113,5 +190,8 @@ enum VisionCompositorSelfTest {
         case imageCreation
         case composition
         case encoding
+        case unexpectedSize(Int, Int)
+        case outputTooDark(Int)
+        case hudMissing(Int)
     }
 }

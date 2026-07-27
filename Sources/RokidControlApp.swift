@@ -3,6 +3,11 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
+private final class ActivationWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
 final class RokidControlApp: NSObject, NSApplicationDelegate {
     private enum DisplayMode {
         case standard
@@ -13,11 +18,21 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     private var runner: ProcessRunner?
     private var connection: RokidConnectionManager?
     private var keyboard: KeyboardController?
+    // Main-thread-only UI state.
     private var scrcpyApplication: NSRunningApplication?
     private var visionController: VisionModeController?
     private var visionRecoveryInProgress = false
     private var displayMode: DisplayMode = .standard
-    private var isTerminating = false
+    private var scrcpyTerminationObserver: NSObjectProtocol?
+    private var scrcpyTerminationSource: DispatchSourceProcess?
+    private var connectingWindow: NSWindow?
+    private var connectingStatusLabel: NSTextField?
+    private var terminationWindow: NSWindow?
+    private var activationWindow: NSWindow?
+    private let stateLock = NSLock()
+    private var terminationStarted = false
+    private var terminationFinished = false
+    private var connectionCancelled = false
     private var scrcpyRestartCount = 0
     private var lastScrcpyStart = Date.distantPast
     private let workQueue = DispatchQueue(label: "RokidControl.MainWork")
@@ -27,12 +42,6 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         installMainMenu()
         NSApp.activate(ignoringOtherApps: true)
 
-        guard let selectedMode = chooseDisplayMode() else {
-            NSApp.terminate(nil)
-            return
-        }
-        displayMode = selectedMode
-
         guard requestAccessibilityIfNeeded() else {
             showFailure(
                 title: "キーボード操作の許可が必要です",
@@ -40,6 +49,13 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             )
             return
         }
+
+        guard let selectedMode = chooseDisplayMode() else {
+            NSApp.terminate(nil)
+            return
+        }
+        displayMode = selectedMode
+
         if displayMode == .vision && !requestScreenCaptureIfNeeded() {
             showFailure(
                 title: "画面収録の許可が必要です",
@@ -51,10 +67,11 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         do {
             let logger = try AppLogger()
             self.logger = logger
+            let resources = try locateResources()
+            terminateOrphanedScrcpy(at: resources.scrcpyApp, logger: logger)
             logger.log(
                 "表示モード \(displayMode == .vision ? "視界表示" : "通常表示")"
             )
-            let resources = try locateResources()
             let environment = makeEnvironment(resources: resources)
             let runner = ProcessRunner(environment: environment)
             self.runner = runner
@@ -65,28 +82,52 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
                 logger: logger
             )
             self.connection = connection
+            showConnectingWindow()
 
             workQueue.async { [weak self] in
                 guard let self else { return }
                 do {
                     connection.prepareADBServer()
-                    _ = try connection.connectForStartup()
+                    _ = try connection.connectForStartup(
+                        onProgress: { [weak self] message in
+                            self?.updateConnectingStatus(message)
+                        },
+                        isCancelled: { [weak self] in
+                            self?.shouldCancelConnection() ?? true
+                        }
+                    )
+                    self.updateConnectingStatus(
+                        "Mac操作モードを開始しています…"
+                    )
                     try self.startMacModeWithRetry()
 
                     let keyboard = KeyboardController(
                         connection: connection,
-                        logger: logger
+                        logger: logger,
+                        scrcpyAppURL: resources.scrcpyApp
                     )
-                    keyboard.updateScreenSize()
-                    DispatchQueue.main.sync {
+                    let deviceSize = keyboard.updateScreenSize()
+                    let keyboardStarted = DispatchQueue.main.sync {
+                        guard !self.isTerminating else { return false }
                         self.keyboard = keyboard
-                        if !keyboard.start() {
+                        keyboard.onActivate = { [weak self] in
+                            self?.activateAfterScrcpyClick()
+                        }
+                        keyboard.onQuit = {
+                            NSApp.terminate(nil)
+                        }
+                        return keyboard.start()
+                    }
+                    guard keyboardStarted else {
+                        if !self.isTerminating {
                             self.failFromWorker(
                                 title: "キーボード操作を開始できませんでした",
                                 message: "macOSのアクセシビリティ設定を確認してください。"
                             )
                         }
+                        return
                     }
+                    self.updateConnectingStatus("画面を受信しています…")
                     switch self.displayMode {
                     case .standard:
                         self.launchScrcpy(
@@ -101,11 +142,21 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
                                 keyboard: keyboard,
                                 logger: logger,
                                 resources: resources,
-                                environment: environment
+                                environment: environment,
+                                deviceSize: CGSize(
+                                    width: deviceSize.0,
+                                    height: deviceSize.1
+                                )
                             )
                         }
                     }
                 } catch {
+                    if case RokidConnectionError.cancelled = error {
+                        DispatchQueue.main.async {
+                            NSApp.terminate(nil)
+                        }
+                        return
+                    }
                     self.failFromWorker(
                         title: "Rokid操作を開始できませんでした",
                         message: error.localizedDescription
@@ -120,37 +171,64 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        guard beginTermination() else {
+            return isTerminationFinished ? .terminateNow : .terminateLater
+        }
+
+        stopLocalResources()
+        showTerminationWindowIfNeeded()
+        let connection = self.connection
+        let logger = self.logger
+        workQueue.async { [weak self] in
+            connection?.stopMacMode()
+            DispatchQueue.main.async {
+                logger?.log("Rokid Control終了")
+                logger?.close()
+                self?.logger = nil
+                self?.finishTermination()
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        cleanup()
+        removeScrcpyTerminationObserver()
+        stopLocalResources()
     }
 
     private func chooseDisplayMode() -> DisplayMode? {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "背景を選んでください"
-        alert.informativeText =
-            "ライブ映像：カメラの映像を背景に表示します。\n"
-            + "背景なし（省電力）：黒い背景で表示します。ライブ映像は使いません。"
-        alert.addButton(withTitle: "ライブ映像")
-        alert.addButton(withTitle: "背景なし（省電力）")
-        alert.addButton(withTitle: "キャンセル")
+        while true {
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = "背景を選んでください"
+            alert.informativeText =
+                "ライブ映像：カメラの映像を背景に表示します。\n"
+                + "背景なし（省電力）：黒い背景で表示します。ライブ映像は使いません。"
+            alert.addButton(withTitle: "ライブ映像")
+            alert.addButton(withTitle: "背景なし（省電力）")
+            alert.addButton(withTitle: "キャンセル")
 
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            let warning = NSAlert()
-            warning.alertStyle = .informational
-            warning.messageText = "ライブ映像を開始します"
-            warning.informativeText =
-                "カメラを使用するため、背景なし（省電力）より電池を多く消費します。"
-            warning.addButton(withTitle: "開始")
-            warning.addButton(withTitle: "戻る")
-            return warning.runModal() == .alertFirstButtonReturn
-                ? .vision
-                : chooseDisplayMode()
-        case .alertSecondButtonReturn:
-            return .standard
-        default:
-            return nil
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                let warning = NSAlert()
+                warning.alertStyle = .informational
+                warning.messageText = "ライブ映像を開始します"
+                warning.informativeText =
+                    "カメラを使用するため、背景なし（省電力）より電池を多く消費します。"
+                warning.addButton(withTitle: "開始")
+                warning.addButton(withTitle: "戻る")
+                if warning.runModal() == .alertFirstButtonReturn {
+                    return .vision
+                }
+            case .alertSecondButtonReturn:
+                return .standard
+            default:
+                return nil
+            }
         }
     }
 
@@ -189,23 +267,23 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
 
                 DispatchQueue.main.async {
                     self.scrcpyApplication = runningApplication
-                    self.lastScrcpyStart = Date()
+                    self.recordScrcpyStart()
                     self.keyboard?.updateScrcpyProcessIdentifier(
                         runningApplication.processIdentifier
                     )
+                    self.registerScrcpyTerminationObserver(
+                        for: runningApplication,
+                        resources: resources,
+                        environment: environment
+                    )
+                    self.ensureActivationWindow()
+                    self.closeConnectingWindow()
                     logger.log(
                         "scrcpy開始 pid=\(runningApplication.processIdentifier) serial=\(serial)"
                     )
                     self.focusScrcpy(
                         processIdentifier: runningApplication.processIdentifier
                     )
-                    self.workQueue.async { [weak self] in
-                        self?.monitorScrcpy(
-                            runningApplication,
-                            resources: resources,
-                            environment: environment
-                        )
-                    }
                 }
             }
         }
@@ -216,15 +294,18 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         keyboard: KeyboardController,
         logger: AppLogger,
         resources: AppResources,
-        environment: [String: String]
+        environment: [String: String],
+        deviceSize: CGSize
     ) {
         guard !isTerminating else { return }
+        closeConnectingWindow()
         let controller = VisionModeController(
             connection: connection,
             keyboard: keyboard,
             logger: logger,
             resources: resources,
             environment: environment,
+            deviceSize: deviceSize,
             onClose: { [weak self] in
                 NSApp.terminate(self)
             },
@@ -269,7 +350,12 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             self.workQueue.async { [weak self] in
                 guard let self, !self.isTerminating else { return }
                 if !connection.isCurrentConnectionAlive() {
-                    guard connection.reconnect() != nil else {
+                    guard connection.reconnect(
+                        isCancelled: { [weak self] in
+                            self?.isTerminating ?? true
+                        }
+                    ) != nil else {
+                        guard !self.isTerminating else { return }
                         self.failFromWorker(
                             title: "Wi-Fi接続を復旧できませんでした",
                             message: "Rokidで「Wi-Fi ON」を開いてから、もう一度起動してください。"
@@ -296,33 +382,97 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
                         keyboard: keyboard,
                         logger: logger,
                         resources: resources,
-                        environment: environment
+                        environment: environment,
+                        deviceSize: {
+                            let size = keyboard.currentScreenSize()
+                            return CGSize(width: size.0, height: size.1)
+                        }()
                     )
                 }
             }
         }
     }
 
-    private func monitorScrcpy(
-        _ application: NSRunningApplication,
+    private func registerScrcpyTerminationObserver(
+        for application: NSRunningApplication,
         resources: AppResources,
         environment: [String: String]
     ) {
-        while !application.isTerminated && !isTerminating {
-            Thread.sleep(forTimeInterval: 0.2)
-        }
-        guard !isTerminating else { return }
-        handleScrcpyTermination(
-            resources: resources,
-            environment: environment
+        removeScrcpyTerminationObserver()
+        let processIdentifier = application.processIdentifier
+        let source = DispatchSource.makeProcessSource(
+            identifier: processIdentifier,
+            eventMask: .exit,
+            queue: .main
         )
+        source.setEventHandler { [weak self] in
+            self?.handleObservedScrcpyTermination(
+                processIdentifier: processIdentifier,
+                resources: resources,
+                environment: environment
+            )
+        }
+        scrcpyTerminationSource = source
+        source.resume()
+
+        scrcpyTerminationObserver = NSWorkspace.shared.notificationCenter
+            .addObserver(
+                forName: NSWorkspace.didTerminateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard
+                    let self,
+                    let terminated = notification.userInfo?[
+                        NSWorkspace.applicationUserInfoKey
+                    ] as? NSRunningApplication,
+                    terminated.processIdentifier == processIdentifier
+                else {
+                    return
+                }
+                self.handleObservedScrcpyTermination(
+                    processIdentifier: processIdentifier,
+                    resources: resources,
+                    environment: environment
+                )
+            }
+    }
+
+    private func handleObservedScrcpyTermination(
+        processIdentifier: pid_t,
+        resources: AppResources,
+        environment: [String: String]
+    ) {
+        guard
+            scrcpyApplication?.processIdentifier == processIdentifier
+        else {
+            return
+        }
+        removeScrcpyTerminationObserver()
+        scrcpyApplication = nil
+        keyboard?.updateScrcpyProcessIdentifier(nil)
+        guard !isTerminating else { return }
+        workQueue.async { [weak self] in
+            self?.handleScrcpyTermination(
+                resources: resources,
+                environment: environment
+            )
+        }
+    }
+
+    private func removeScrcpyTerminationObserver() {
+        if let observer = scrcpyTerminationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            scrcpyTerminationObserver = nil
+        }
+        scrcpyTerminationSource?.cancel()
+        scrcpyTerminationSource = nil
     }
 
     private func focusScrcpy(processIdentifier: pid_t) {
         for delay in [1.0, 2.0, 3.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard self?.isTerminating == false else { return }
-                NSApp.activate(ignoringOtherApps: true)
                 let activated = NSRunningApplication(
                     processIdentifier: processIdentifier
                 )?.activate(options: [.activateAllWindows]) ?? false
@@ -361,6 +511,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
                         kAXRaiseAction as CFString
                     ) == .success
                 }
+                self?.activateRokidControl()
                 self?.logger?.log(
                     "scrcpy画面を最前面へ移動 activated=\(activated) raised=\(raised)"
                 )
@@ -373,25 +524,17 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         environment: [String: String]
     ) {
         logger?.log("scrcpy終了")
-        keyboard?.updateScrcpyProcessIdentifier(nil)
         guard !isTerminating else { return }
 
         guard let connection else { return }
         if connection.isCurrentConnectionAlive() {
-            cleanup()
             DispatchQueue.main.async {
                 NSApp.terminate(nil)
             }
             return
         }
 
-        let elapsed = Date().timeIntervalSince(lastScrcpyStart)
-        if elapsed < 5 {
-            scrcpyRestartCount += 1
-        } else {
-            scrcpyRestartCount = 0
-        }
-        if scrcpyRestartCount >= 2 {
+        if shouldAskBeforeRestartingScrcpy() {
             askUserWhetherToReconnect(
                 resources: resources,
                 environment: environment
@@ -408,7 +551,12 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     ) {
         guard !isTerminating, let connection else { return }
         logger?.log("Wi-Fi再接続開始")
-        guard connection.reconnect() != nil else {
+        guard connection.reconnect(
+            isCancelled: { [weak self] in
+                self?.isTerminating ?? true
+            }
+        ) != nil else {
+            guard !isTerminating else { return }
             failFromWorker(
                 title: "Wi-Fi接続を復旧できませんでした",
                 message: "Rokidで「Wi-Fi ON」を開いてから、もう一度起動してください。"
@@ -446,7 +594,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "終了")
 
             if alert.runModal() == .alertFirstButtonReturn {
-                self.scrcpyRestartCount = 0
+                self.resetScrcpyRestartCount()
                 self.workQueue.async { [weak self] in
                     self?.reconnectScrcpy(
                         resources: resources,
@@ -461,10 +609,14 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
 
     private func installMainMenu() {
         let mainMenu = NSMenu()
-        let appMenuItem = NSMenuItem()
+        let appMenuItem = NSMenuItem(
+            title: "Rokid Control",
+            action: nil,
+            keyEquivalent: ""
+        )
         mainMenu.addItem(appMenuItem)
 
-        let appMenu = NSMenu()
+        let appMenu = NSMenu(title: "Rokid Control")
         appMenu.addItem(
             withTitle: "Rokid Controlを終了",
             action: #selector(NSApplication.terminate(_:)),
@@ -480,6 +632,9 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         }
         var lastError: Error = RokidConnectionError.watchdogFailed
         for attempt in 1...3 {
+            if isTerminating {
+                throw RokidConnectionError.cancelled
+            }
             do {
                 try connection.startMacMode()
                 return
@@ -494,22 +649,270 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         throw lastError
     }
 
-    private func cleanup() {
-        if isTerminating { return }
-        isTerminating = true
+    private var isTerminating: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return terminationStarted
+    }
+
+    private var isTerminationFinished: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return terminationFinished
+    }
+
+    private func beginTermination() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !terminationStarted else { return false }
+        terminationStarted = true
+        connectionCancelled = true
+        return true
+    }
+
+    private func finishTermination() {
+        stateLock.lock()
+        terminationFinished = true
+        stateLock.unlock()
+        terminationWindow?.orderOut(nil)
+        terminationWindow = nil
+    }
+
+    private func shouldCancelConnection() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return connectionCancelled || terminationStarted
+    }
+
+    private func recordScrcpyStart() {
+        stateLock.lock()
+        lastScrcpyStart = Date()
+        stateLock.unlock()
+    }
+
+    private func shouldAskBeforeRestartingScrcpy() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        let elapsed = Date().timeIntervalSince(lastScrcpyStart)
+        if elapsed < 5 {
+            scrcpyRestartCount += 1
+        } else {
+            scrcpyRestartCount = 0
+        }
+        return scrcpyRestartCount >= 2
+    }
+
+    private func resetScrcpyRestartCount() {
+        stateLock.lock()
+        scrcpyRestartCount = 0
+        stateLock.unlock()
+    }
+
+    private func stopLocalResources() {
+        precondition(Thread.isMainThread)
+        closeConnectingWindow()
+        removeScrcpyTerminationObserver()
         keyboard?.stop()
+        keyboard?.onActivate = nil
+        keyboard?.onQuit = nil
         keyboard = nil
         visionController?.stop()
         visionController = nil
         visionRecoveryInProgress = false
+        activationWindow?.orderOut(nil)
+        activationWindow = nil
 
         if let application = scrcpyApplication, !application.isTerminated {
             application.terminate()
         }
-        connection?.stopMacMode()
-        connection?.shutdownADBServer()
-        logger?.log("Rokid Control終了")
-        logger?.close()
+        scrcpyApplication = nil
+    }
+
+    private func ensureActivationWindow() {
+        precondition(Thread.isMainThread)
+        guard activationWindow == nil else { return }
+
+        let visibleFrame = NSScreen.main?.visibleFrame ?? .zero
+        let window = ActivationWindow(
+            contentRect: NSRect(
+                x: visibleFrame.minX + 1,
+                y: visibleFrame.minY + 1,
+                width: 1,
+                height: 1
+            ),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.alphaValue = 0.01
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        window.hidesOnDeactivate = false
+        window.isExcludedFromWindowsMenu = true
+        window.collectionBehavior = [.transient, .ignoresCycle]
+        activationWindow = window
+        window.orderFront(nil)
+    }
+
+    private func activateRokidControl() {
+        precondition(Thread.isMainThread)
+        ensureActivationWindow()
+        activationWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func activateAfterScrcpyClick() {
+        precondition(Thread.isMainThread)
+        // The system finishes activating the clicked LSUIElement window after
+        // the event tap callback. Reclaim the regular app menu just afterward.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            guard let self, !self.isTerminating else { return }
+            self.activateRokidControl()
+            self.logger?.log("Rokid画面クリックでアプリを前面化")
+        }
+    }
+
+    private func showConnectingWindow() {
+        precondition(Thread.isMainThread)
+        closeConnectingWindow()
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 150),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Rokid Control"
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        let status = NSTextField(labelWithString: "Rokidを探しています…")
+        status.font = NSFont.systemFont(ofSize: 15, weight: .medium)
+        status.alignment = .center
+        status.maximumNumberOfLines = 2
+
+        let indicator = NSProgressIndicator()
+        indicator.style = .spinning
+        indicator.controlSize = .regular
+        indicator.startAnimation(nil)
+
+        let cancel = NSButton(
+            title: "キャンセル",
+            target: self,
+            action: #selector(cancelConnecting)
+        )
+        cancel.bezelStyle = .rounded
+
+        let stack = NSStackView(views: [indicator, status, cancel])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        guard let content = window.contentView else { return }
+        content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(
+                greaterThanOrEqualTo: content.leadingAnchor,
+                constant: 24
+            ),
+            stack.trailingAnchor.constraint(
+                lessThanOrEqualTo: content.trailingAnchor,
+                constant: -24
+            ),
+            stack.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            status.widthAnchor.constraint(equalToConstant: 360),
+        ])
+
+        connectingWindow = window
+        connectingStatusLabel = status
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func updateConnectingStatus(_ message: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTerminating else { return }
+            self.connectingStatusLabel?.stringValue = message
+        }
+    }
+
+    @objc private func cancelConnecting() {
+        stateLock.lock()
+        connectionCancelled = true
+        stateLock.unlock()
+        connectingStatusLabel?.stringValue = "キャンセルしています…"
+        NSApp.terminate(nil)
+    }
+
+    private func closeConnectingWindow() {
+        precondition(Thread.isMainThread)
+        connectingWindow?.orderOut(nil)
+        connectingWindow = nil
+        connectingStatusLabel = nil
+    }
+
+    private func showTerminationWindowIfNeeded() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self,
+                  self.isTerminating,
+                  !self.isTerminationFinished
+            else {
+                return
+            }
+
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 320, height: 110),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "Rokid Control"
+            window.isReleasedWhenClosed = false
+            window.center()
+
+            let indicator = NSProgressIndicator()
+            indicator.style = .spinning
+            indicator.startAnimation(nil)
+            let label = NSTextField(labelWithString: "終了しています…")
+            label.font = NSFont.systemFont(ofSize: 15, weight: .medium)
+            let stack = NSStackView(views: [indicator, label])
+            stack.orientation = .horizontal
+            stack.alignment = .centerY
+            stack.spacing = 12
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            guard let content = window.contentView else { return }
+            content.addSubview(stack)
+            NSLayoutConstraint.activate([
+                stack.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+                stack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            ])
+
+            self.terminationWindow = window
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private func terminateOrphanedScrcpy(
+        at scrcpyAppURL: URL,
+        logger: AppLogger
+    ) {
+        let expectedURL = scrcpyAppURL.standardizedFileURL
+        for application in NSWorkspace.shared.runningApplications
+        where application.bundleURL?.standardizedFileURL == expectedURL {
+            logger.log(
+                "前回の残存scrcpyを終了 pid=\(application.processIdentifier)"
+            )
+            application.terminate()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                if !application.isTerminated {
+                    application.forceTerminate()
+                }
+            }
+        }
     }
 
     private func requestAccessibilityIfNeeded() -> Bool {
@@ -581,13 +984,13 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
 
     private func failFromWorker(title: String, message: String) {
         logger?.log("ERROR \(title): \(message)")
-        cleanup()
         DispatchQueue.main.async { [weak self] in
             self?.showFailure(title: title, message: message)
         }
     }
 
     private func showFailure(title: String, message: String) {
+        closeConnectingWindow()
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = title

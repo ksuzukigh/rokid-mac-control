@@ -13,6 +13,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     private let logger: AppLogger
     private let resources: AppResources
     private let environment: [String: String]
+    private let deviceSize: CGSize
     private let onClose: () -> Void
     private let onFailure: (String, String) -> Void
     private let onSourceStopped: () -> Void
@@ -38,6 +39,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         logger: AppLogger,
         resources: AppResources,
         environment: [String: String],
+        deviceSize: CGSize,
         onClose: @escaping () -> Void,
         onFailure: @escaping (String, String) -> Void,
         onSourceStopped: @escaping () -> Void
@@ -47,6 +49,10 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         self.logger = logger
         self.resources = resources
         self.environment = environment
+        self.deviceSize = CGSize(
+            width: max(deviceSize.width.rounded(), 1),
+            height: max(deviceSize.height.rounded(), 1)
+        )
         self.onClose = onClose
         self.onFailure = onFailure
         self.onSourceStopped = onSourceStopped
@@ -109,7 +115,10 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     }
 
     private func createVisionWindow() {
-        let size = NSSize(width: 480, height: 640)
+        let size = NSSize(
+            width: deviceSize.width,
+            height: deviceSize.height
+        )
         let frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(
             contentRect: frame,
@@ -123,7 +132,10 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         window.center()
         window.delegate = self
 
-        let displayView = VisionDisplayView(frame: frame)
+        let displayView = VisionDisplayView(
+            frame: frame,
+            deviceSize: deviceSize
+        )
         displayView.autoresizingMask = [.width, .height]
         displayView.onTap = { [weak self] x, y in
             self?.sendTap(x: x, y: y)
@@ -215,8 +227,8 @@ final class VisionModeController: NSObject, NSWindowDelegate {
                 "--keyboard=disabled",
                 "--window-title=Rokid Vision HUD Source",
                 "--window-borderless",
-                "--window-width=480",
-                "--window-height=640",
+                "--window-width=\(Int(deviceSize.width))",
+                "--window-height=\(Int(deviceSize.height))",
                 "--window-x=\(sourcePosition.x)",
                 "--window-y=\(sourcePosition.y)",
             ]
@@ -257,15 +269,15 @@ final class VisionModeController: NSObject, NSWindowDelegate {
                 "--serial", serial,
                 "--video-source=camera",
                 "--camera-ar=4:3",
-                "--max-size=640",
+                "--max-size=\(Int(max(deviceSize.width, deviceSize.height)))",
                 "--camera-fps=15",
                 "--orientation=270",
                 "--no-audio",
                 "--no-control",
                 "--window-title=Rokid Vision Camera Source",
                 "--window-borderless",
-                "--window-width=480",
-                "--window-height=640",
+                "--window-width=\(Int(deviceSize.width))",
+                "--window-height=\(Int(deviceSize.height))",
                 "--window-x=\(sourcePosition.x)",
                 "--window-y=\(sourcePosition.y)",
             ]
@@ -367,6 +379,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
                 return
             }
             let compositor = VisionFrameCompositor(
+                outputSize: self.deviceSize,
                 hudVisibility: self.hudVisibility
             )
             compositor.onFrame = { [weak self] frame in
@@ -391,7 +404,9 @@ final class VisionModeController: NSObject, NSWindowDelegate {
                 self.captureRecoveryAttempts = 0
                 self.cameraRecoveryScheduled = false
                 self.cameraRecoveryAttempts = 0
-                self.logger.log("視界表示 合成開始 480x640@15fps")
+                self.logger.log(
+                    "視界表示 合成開始 \(Int(self.deviceSize.width))x\(Int(self.deviceSize.height))@15fps"
+                )
                 self.scheduleSourceWindowHiding()
                 self.window?.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
