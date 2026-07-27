@@ -8,6 +8,23 @@ private final class ActivationWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
+private final class NavigationHighlightView: NSView {
+    override var isOpaque: Bool { false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        NSColor.black.withAlphaComponent(0.65).setStroke()
+        let outer = NSBezierPath(ovalIn: bounds.insetBy(dx: 3, dy: 3))
+        outer.lineWidth = 7
+        outer.stroke()
+
+        NSColor.systemCyan.setStroke()
+        let inner = NSBezierPath(ovalIn: bounds.insetBy(dx: 5, dy: 5))
+        inner.lineWidth = 3
+        inner.stroke()
+    }
+}
+
 final class RokidControlApp: NSObject, NSApplicationDelegate {
     private enum DisplayMode {
         case standard
@@ -29,6 +46,8 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     private var connectingStatusLabel: NSTextField?
     private var terminationWindow: NSWindow?
     private var activationWindow: NSWindow?
+    private var navigationHighlightWindow: NSPanel?
+    private var currentNavigationItem: LowerNavigationItem?
     private let stateLock = NSLock()
     private var terminationStarted = false
     private var terminationFinished = false
@@ -112,6 +131,9 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
                         self.keyboard = keyboard
                         keyboard.onActivate = { [weak self] in
                             self?.activateAfterScrcpyClick()
+                        }
+                        keyboard.onNavigationSelection = { [weak self] item in
+                            self?.updateNavigationSelection(item)
                         }
                         keyboard.onQuit = {
                             NSApp.terminate(nil)
@@ -714,6 +736,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         removeScrcpyTerminationObserver()
         keyboard?.stop()
         keyboard?.onActivate = nil
+        keyboard?.onNavigationSelection = nil
         keyboard?.onQuit = nil
         keyboard = nil
         visionController?.stop()
@@ -721,6 +744,9 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         visionRecoveryInProgress = false
         activationWindow?.orderOut(nil)
         activationWindow = nil
+        navigationHighlightWindow?.orderOut(nil)
+        navigationHighlightWindow = nil
+        currentNavigationItem = nil
 
         if let application = scrcpyApplication, !application.isTerminated {
             application.terminate()
@@ -771,8 +797,144 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
             guard let self, !self.isTerminating else { return }
             self.activateRokidControl()
+            if let item = self.currentNavigationItem {
+                self.showStandardNavigationHighlight(for: item)
+            }
             self.logger?.log("Rokid画面クリックでアプリを前面化")
         }
+    }
+
+    private func updateNavigationSelection(
+        _ item: LowerNavigationItem?
+    ) {
+        precondition(Thread.isMainThread)
+        currentNavigationItem = item
+        visionController?.setNavigationSelection(item)
+        guard displayMode == .standard, let item else {
+            navigationHighlightWindow?.orderOut(nil)
+            return
+        }
+        showStandardNavigationHighlight(for: item)
+    }
+
+    private func showStandardNavigationHighlight(
+        for item: LowerNavigationItem
+    ) {
+        guard
+            let processIdentifier = scrcpyApplication?.processIdentifier,
+            let screenSize = keyboard?.currentScreenSize(),
+            let center = standardNavigationCenter(
+                processIdentifier: processIdentifier,
+                item: item,
+                screenSize: screenSize
+            )
+        else {
+            navigationHighlightWindow?.orderOut(nil)
+            return
+        }
+
+        let window: NSPanel
+        if let existing = navigationHighlightWindow {
+            window = existing
+        } else {
+            window = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 44, height: 44),
+                styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered,
+                defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.hasShadow = false
+            window.isFloatingPanel = true
+            window.becomesKeyOnlyIfNeeded = true
+            window.hidesOnDeactivate = true
+            window.level = .floating
+            window.ignoresMouseEvents = true
+            window.isExcludedFromWindowsMenu = true
+            window.collectionBehavior = [.transient, .ignoresCycle]
+            window.contentView = NavigationHighlightView(
+                frame: NSRect(x: 0, y: 0, width: 44, height: 44)
+            )
+            navigationHighlightWindow = window
+        }
+        window.setFrameOrigin(
+            NSPoint(
+                x: center.x - window.frame.width / 2,
+                y: center.y - window.frame.height / 2
+            )
+        )
+        window.orderFrontRegardless()
+    }
+
+    private func standardNavigationCenter(
+        processIdentifier: pid_t,
+        item: LowerNavigationItem,
+        screenSize: (Int, Int)
+    ) -> NSPoint? {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return nil
+        }
+        guard let window = windows.first(where: {
+            guard
+                let owner = $0[kCGWindowOwnerPID as String] as? NSNumber,
+                owner.int32Value == processIdentifier,
+                let layer = $0[kCGWindowLayer as String] as? NSNumber
+            else {
+                return false
+            }
+            return layer.intValue == 0
+        }),
+        let boundsDictionary = window[
+            kCGWindowBounds as String
+        ] as? NSDictionary,
+        let bounds = CGRect(
+            dictionaryRepresentation: boundsDictionary as CFDictionary
+        ) else {
+            return nil
+        }
+
+        let width = CGFloat(max(screenSize.0, 1))
+        let height = CGFloat(max(screenSize.1, 1))
+        let contentHeight = min(bounds.height, bounds.width * height / width)
+        let contentWidth = contentHeight * width / height
+        let contentLeft = bounds.midX - contentWidth / 2
+        let contentTop = bounds.maxY - contentHeight
+        let deviceX = width / 2
+            + CGFloat(item.horizontalOffset(for: screenSize.0))
+        let deviceY = height / 2 + height / 60
+        let quartzPoint = CGPoint(
+            x: contentLeft + deviceX / width * contentWidth,
+            y: contentTop + deviceY / height * contentHeight
+        )
+        return cocoaPoint(fromQuartzPoint: quartzPoint)
+    }
+
+    private func cocoaPoint(
+        fromQuartzPoint point: CGPoint
+    ) -> NSPoint? {
+        for screen in NSScreen.screens {
+            guard
+                let screenNumber = screen.deviceDescription[
+                    NSDeviceDescriptionKey("NSScreenNumber")
+                ] as? NSNumber
+            else {
+                continue
+            }
+            let quartzBounds = CGDisplayBounds(
+                CGDirectDisplayID(screenNumber.uint32Value)
+            )
+            guard quartzBounds.contains(point) else { continue }
+            return NSPoint(
+                x: screen.frame.minX + point.x - quartzBounds.minX,
+                y: screen.frame.maxY - (point.y - quartzBounds.minY)
+            )
+        }
+        return nil
     }
 
     private func showConnectingWindow() {

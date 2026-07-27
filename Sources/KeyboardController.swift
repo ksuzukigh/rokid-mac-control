@@ -15,7 +15,10 @@ final class KeyboardController {
     private var height = 640
     private let targetPIDLock = NSLock()
     private var scrcpyProcessIdentifier: pid_t?
+    // Access only from actionQueue.
+    private var navigationState = KeyboardNavigationState()
     var onActivate: (() -> Void)?
+    var onNavigationSelection: ((LowerNavigationItem?) -> Void)?
     var onQuit: (() -> Void)?
 
     init(
@@ -122,6 +125,7 @@ final class KeyboardController {
             // previously active app. Use the actual frontmost window under the
             // pointer so covered scrcpy regions do not steal focus.
             if pointTargetsScrcpyWindow(event.location) {
+                resetNavigationMode()
                 DispatchQueue.main.async { [weak self] in
                     self?.onActivate?()
                 }
@@ -146,32 +150,39 @@ final class KeyboardController {
             }
             return nil
         }
-        let shiftPressed = event.flags.contains(.maskShift)
-        let screenSize = currentScreenSize()
 
         let handled: Bool
         switch keyCode {
         case 123:
-            shiftPressed
-                ? wakeAndTapCenterRow(offsetX: -(screenSize.0 / 15))
-                : keyEvent("KEYCODE_DPAD_LEFT")
+            handleHorizontalNavigation(
+                offset: -1,
+                upperRowKey: "KEYCODE_DPAD_LEFT"
+            )
             handled = true
         case 124:
-            shiftPressed
-                ? wakeAndTapCenterRow(offsetX: screenSize.0 / 15)
-                : keyEvent("KEYCODE_DPAD_RIGHT")
+            handleHorizontalNavigation(
+                offset: 1,
+                upperRowKey: "KEYCODE_DPAD_RIGHT"
+            )
+            handled = true
+        case 125:
+            handleDownNavigation()
+            handled = true
+        case 126:
+            handleUpNavigation()
             handled = true
         case 49:
+            resetNavigationMode()
             handleSpace()
             handled = true
         case 36, 76:
-            keyEvent("KEYCODE_ENTER")
+            handleEnter()
             handled = true
         case 53:
-            keyEvent("KEYCODE_BACK")
+            handleBack()
             handled = true
         case 4:
-            wakeAndTapCenterRow(offsetX: 0)
+            openHome()
             handled = true
         default:
             handled = false
@@ -242,34 +253,136 @@ final class KeyboardController {
         return false
     }
 
-    private func keyEvent(_ androidKey: String) {
+    func resetNavigationMode() {
         actionQueue.async { [weak self] in
             guard let self else { return }
-            let serial = connection.currentSerial()
-            _ = connection.runADB([
-                "-s", serial, "shell", "input", "keyevent", androidKey,
-            ])
-            logger.log("キー \(androidKey)")
+            if navigationState.leaveLowerRow() {
+                publishNavigationStatus(nil)
+                logger.log("キーボード選択 上段")
+            }
         }
     }
 
-    private func wakeAndTapCenterRow(offsetX: Int) {
+    private func handleHorizontalNavigation(
+        offset: Int,
+        upperRowKey: String
+    ) {
         actionQueue.async { [weak self] in
             guard let self else { return }
-            let screenSize = currentScreenSize()
-            let serial = connection.currentSerial()
-            _ = connection.runADB([
-                "-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP",
-            ])
-            _ = connection.runADB([
-                "-s", serial, "shell", "input", "keyevent", "KEYCODE_HOME",
-            ])
-            Thread.sleep(forTimeInterval: 0.35)
-            _ = connection.runADB([
-                "-s", serial, "shell", "input", "tap",
-                "\(screenSize.0 / 2 + offsetX)", "\(screenSize.1 / 2)",
-            ])
-            logger.log("中央行タップ offsetX=\(offsetX)")
+            if let item = navigationState.moveLowerRow(by: offset) {
+                publishNavigationStatus(item)
+                logger.log("キーボード選択 下段 \(item.title)")
+                return
+            }
+            sendKeyEvent(upperRowKey)
+        }
+    }
+
+    private func handleDownNavigation() {
+        actionQueue.async { [weak self] in
+            guard let self else { return }
+            if let item = navigationState.lowerItem {
+                publishNavigationStatus(item)
+                return
+            }
+            guard isLauncherActive() else {
+                sendKeyEvent("KEYCODE_DPAD_DOWN")
+                return
+            }
+            let item = navigationState.enterLowerRow()
+            publishNavigationStatus(item)
+            logger.log("キーボード選択 下段 \(item.title)")
+        }
+    }
+
+    private func handleUpNavigation() {
+        actionQueue.async { [weak self] in
+            guard let self else { return }
+            if navigationState.leaveLowerRow() {
+                publishNavigationStatus(nil)
+                logger.log("キーボード選択 上段")
+                return
+            }
+            sendKeyEvent("KEYCODE_DPAD_UP")
+        }
+    }
+
+    private func handleEnter() {
+        actionQueue.async { [weak self] in
+            guard let self else { return }
+            guard let item = navigationState.lowerItem else {
+                sendKeyEvent("KEYCODE_ENTER")
+                return
+            }
+            _ = navigationState.leaveLowerRow()
+            publishNavigationStatus(nil)
+            wakeAndTapLowerItem(item)
+        }
+    }
+
+    private func handleBack() {
+        actionQueue.async { [weak self] in
+            guard let self else { return }
+            if navigationState.leaveLowerRow() {
+                publishNavigationStatus(nil)
+                logger.log("キーボード選択 上段")
+                return
+            }
+            sendKeyEvent("KEYCODE_BACK")
+        }
+    }
+
+    private func openHome() {
+        actionQueue.async { [weak self] in
+            guard let self else { return }
+            _ = navigationState.leaveLowerRow()
+            publishNavigationStatus(nil)
+            wakeAndTapLowerItem(.home)
+        }
+    }
+
+    private func isLauncherActive() -> Bool {
+        let serial = connection.currentSerial()
+        let result = connection.runADB([
+            "-s", serial, "shell",
+            "dumpsys activity activities | grep 'ResumedActivity:'",
+        ], timeout: 1.5)
+        if result.timedOut {
+            logger.log("ホーム画面判定がタイムアウト")
+        }
+        return result.output.contains("com.rokid.os.sprite.launcher/")
+    }
+
+    private func sendKeyEvent(_ androidKey: String) {
+        let serial = connection.currentSerial()
+        _ = connection.runADB([
+            "-s", serial, "shell", "input", "keyevent", androidKey,
+        ])
+        logger.log("キー \(androidKey)")
+    }
+
+    private func wakeAndTapLowerItem(_ item: LowerNavigationItem) {
+        let screenSize = currentScreenSize()
+        let serial = connection.currentSerial()
+        _ = connection.runADB([
+            "-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP",
+        ])
+        _ = connection.runADB([
+            "-s", serial, "shell", "input", "keyevent", "KEYCODE_HOME",
+        ])
+        Thread.sleep(forTimeInterval: 0.35)
+        let x = screenSize.0 / 2
+            + item.horizontalOffset(for: screenSize.0)
+        _ = connection.runADB([
+            "-s", serial, "shell", "input", "tap",
+            "\(x)", "\(screenSize.1 / 2)",
+        ])
+        logger.log("下段を開く \(item.title)")
+    }
+
+    private func publishNavigationStatus(_ item: LowerNavigationItem?) {
+        DispatchQueue.main.async { [weak self] in
+            self?.onNavigationSelection?(item)
         }
     }
 
