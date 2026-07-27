@@ -18,10 +18,13 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     private var visionRecoveryInProgress = false
     private var displayMode: DisplayMode = .standard
     private var isTerminating = false
+    private var scrcpyRestartCount = 0
+    private var lastScrcpyStart = Date.distantPast
     private let workQueue = DispatchQueue(label: "RokidControl.MainWork")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        installMainMenu()
         NSApp.activate(ignoringOtherApps: true)
 
         guard let selectedMode = chooseDisplayMode() else {
@@ -186,6 +189,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
 
                 DispatchQueue.main.async {
                     self.scrcpyApplication = runningApplication
+                    self.lastScrcpyStart = Date()
                     self.keyboard?.updateScrcpyProcessIdentifier(
                         runningApplication.processIdentifier
                     )
@@ -381,6 +385,28 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             return
         }
 
+        let elapsed = Date().timeIntervalSince(lastScrcpyStart)
+        if elapsed < 5 {
+            scrcpyRestartCount += 1
+        } else {
+            scrcpyRestartCount = 0
+        }
+        if scrcpyRestartCount >= 2 {
+            askUserWhetherToReconnect(
+                resources: resources,
+                environment: environment
+            )
+            return
+        }
+
+        reconnectScrcpy(resources: resources, environment: environment)
+    }
+
+    private func reconnectScrcpy(
+        resources: AppResources,
+        environment: [String: String]
+    ) {
+        guard !isTerminating, let connection else { return }
         logger?.log("Wi-Fi再接続開始")
         guard connection.reconnect() != nil else {
             failFromWorker(
@@ -401,6 +427,51 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
                 message: error.localizedDescription
             )
         }
+    }
+
+    private func askUserWhetherToReconnect(
+        resources: AppResources,
+        environment: [String: String]
+    ) {
+        logger?.log("scrcpyの短時間終了が続いたため自動再接続を停止")
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTerminating else { return }
+
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Rokid画面が繰り返し閉じました"
+            alert.informativeText =
+                "Wi-Fi接続が不安定な可能性があります。再接続しますか？"
+            alert.addButton(withTitle: "再接続")
+            alert.addButton(withTitle: "終了")
+
+            if alert.runModal() == .alertFirstButtonReturn {
+                self.scrcpyRestartCount = 0
+                self.workQueue.async { [weak self] in
+                    self?.reconnectScrcpy(
+                        resources: resources,
+                        environment: environment
+                    )
+                }
+            } else {
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+
+        let appMenu = NSMenu()
+        appMenu.addItem(
+            withTitle: "Rokid Controlを終了",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        appMenuItem.submenu = appMenu
+        NSApp.mainMenu = mainMenu
     }
 
     private func startMacModeWithRetry() throws {

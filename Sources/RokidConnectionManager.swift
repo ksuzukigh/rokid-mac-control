@@ -70,18 +70,21 @@ final class RokidConnectionManager {
         }
 
         if let saved = readSavedAddress(), connect(saved) {
-            return use(saved)
+            if isRokidDevice(saved) {
+                return use(saved)
+            }
+            rejectWiFiDevice(saved, removeSavedAddress: true)
         }
 
-        if let discovered = discoverSecureWiFi(), connect(discovered) {
-            return use(discovered)
+        if let discovered = connectToDiscoveredRokid() {
+            return discovered
         }
 
         logger.log("Wi-Fi接続またはUSB接続を待っています")
         let deadline = Date().addingTimeInterval(60)
         while Date() < deadline {
-            if let discovered = discoverSecureWiFi(), connect(discovered) {
-                return use(discovered)
+            if let discovered = connectToDiscoveredRokid() {
+                return discovered
             }
 
             if let usbSerial = findUSBDevice() {
@@ -94,7 +97,7 @@ final class RokidConnectionManager {
     }
 
     func reconnect() -> String? {
-        let oldSerial = currentSerial()
+        var oldSerial = currentSerial()
         if !oldSerial.isEmpty && oldSerial.contains(":") {
             _ = adb(["disconnect", oldSerial], timeout: 3)
         }
@@ -104,10 +107,14 @@ final class RokidConnectionManager {
                 return useUSB(usbSerial)
             }
             if oldSerial.contains(":") && connect(oldSerial) {
-                return use(oldSerial)
+                if isRokidDevice(oldSerial) {
+                    return use(oldSerial)
+                }
+                rejectWiFiDevice(oldSerial, removeSavedAddress: true)
+                oldSerial = ""
             }
-            if let discovered = discoverSecureWiFi(), connect(discovered) {
-                return use(discovered)
+            if let discovered = connectToDiscoveredRokid() {
+                return discovered
             }
             Thread.sleep(forTimeInterval: 1)
         }
@@ -283,26 +290,47 @@ final class RokidConnectionManager {
             let fields = line.split(whereSeparator: \.isWhitespace)
             guard fields.count >= 2 else { continue }
             let candidate = String(fields[0])
-            if fields[1] == "device" && !candidate.contains(":") {
+            if fields[1] == "device",
+               !candidate.contains(":"),
+               isRokidDevice(candidate) {
                 return candidate
             }
         }
         return nil
     }
 
-    private func discoverSecureWiFi() -> String? {
+    private func connectToDiscoveredRokid() -> String? {
+        for address in discoverSecureWiFi() {
+            guard connect(address) else { continue }
+            if isRokidDevice(address) {
+                return use(address)
+            }
+            rejectWiFiDevice(address)
+        }
+        return nil
+    }
+
+    private func discoverSecureWiFi() -> [String] {
+        var addresses: [String] = []
         let mdns = adb(["mdns", "services"], timeout: 3).output
         for line in mdns.split(whereSeparator: \.isNewline) {
             let fields = line.split(whereSeparator: \.isWhitespace)
             if let index = fields.firstIndex(of: "_adb-tls-connect._tcp"),
                fields.indices.contains(index + 1) {
-                return String(fields[index + 1])
+                addresses.append(String(fields[index + 1]))
             }
         }
-        return discoverWithBonjour()
+        if addresses.isEmpty {
+            addresses = discoverWithBonjour()
+        }
+        return addresses.reduce(into: []) { unique, address in
+            if !unique.contains(address) {
+                unique.append(address)
+            }
+        }
     }
 
-    private func discoverWithBonjour() -> String? {
+    private func discoverWithBonjour() -> [String] {
         let dnsSD = URL(fileURLWithPath: "/usr/bin/dns-sd")
         let browse = runner.run(
             dnsSD,
@@ -310,37 +338,51 @@ final class RokidConnectionManager {
             timeout: 1.2
         ).output
 
-        var serviceName: String?
+        var serviceNames: [String] = []
         for line in browse.split(whereSeparator: \.isNewline) {
             let fields = line.split(whereSeparator: \.isWhitespace)
             guard fields.contains("Add") else { continue }
             if let typeIndex = fields.firstIndex(where: {
                 $0.hasPrefix("_adb-tls-connect._tcp")
             }), fields.indices.contains(typeIndex + 1) {
-                serviceName = String(fields[typeIndex + 1])
+                let serviceName = fields[(typeIndex + 1)...]
+                    .map(String.init)
+                    .joined(separator: " ")
+                if !serviceNames.contains(serviceName) {
+                    serviceNames.append(serviceName)
+                }
             }
         }
-        guard let serviceName else { return nil }
 
-        let lookup = runner.run(
-            dnsSD,
-            arguments: [
-                "-L", serviceName, "_adb-tls-connect._tcp", "local",
-            ],
-            timeout: 1.2
-        ).output
-        for line in lookup.split(whereSeparator: \.isNewline) {
-            let fields = line.split(whereSeparator: \.isWhitespace)
-            guard let at = fields.firstIndex(of: "at"),
-                  fields.indices.contains(at + 1) else {
-                continue
+        var addresses: [String] = []
+        for serviceName in serviceNames {
+            let lookup = runner.run(
+                dnsSD,
+                arguments: [
+                    "-L", serviceName, "_adb-tls-connect._tcp", "local",
+                ],
+                timeout: 1.2
+            ).output
+            for line in lookup.split(whereSeparator: \.isNewline) {
+                let fields = line.split(whereSeparator: \.isWhitespace)
+                guard let at = fields.firstIndex(of: "at"),
+                      fields.indices.contains(at + 1) else {
+                    continue
+                }
+                let address = String(fields[at + 1])
+                    .replacingOccurrences(of: ".:", with: ":")
+                if !addresses.contains(address) {
+                    addresses.append(address)
+                }
             }
-            return String(fields[at + 1]).replacingOccurrences(of: ".:", with: ":")
         }
-        return nil
+        return addresses
     }
 
     private func recoverWiFiUsingUSB(_ usbSerial: String) throws -> String {
+        guard isRokidDevice(usbSerial) else {
+            throw RokidConnectionError.noDevice
+        }
         logger.log("USB接続からWi-Fiを復旧 serial=\(usbSerial)")
         var status = adb([
             "-s", usbSerial, "shell", "cmd", "wifi", "status",
@@ -415,11 +457,46 @@ final class RokidConnectionManager {
         Thread.sleep(forTimeInterval: 2)
         for _ in 0..<10 {
             if connect(address) {
-                return use(address)
+                if isRokidDevice(address) {
+                    return use(address)
+                }
+                rejectWiFiDevice(address)
+                throw RokidConnectionError.noDevice
             }
             Thread.sleep(forTimeInterval: 1)
         }
         throw RokidConnectionError.noDevice
+    }
+
+    private func isRokidDevice(_ address: String) -> Bool {
+        let model = adb([
+            "-s", address, "shell", "getprop", "ro.product.model",
+        ], timeout: 3).output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let manufacturer = adb([
+            "-s", address, "shell", "getprop", "ro.product.manufacturer",
+        ], timeout: 3).output.trimmingCharacters(in: .whitespacesAndNewlines)
+        logger.log(
+            "接続先確認 serial=\(address) model=\(model) manufacturer=\(manufacturer)"
+        )
+
+        let identifiers = [model, manufacturer].map { $0.lowercased() }
+        return identifiers.contains {
+            $0.contains("rokid")
+                || $0.contains("rv101")
+                || $0.contains("rg-glasses")
+        }
+    }
+
+    private func rejectWiFiDevice(
+        _ address: String,
+        removeSavedAddress: Bool = false
+    ) {
+        logger.log("Rokid以外の接続先を拒否 serial=\(address)")
+        _ = adb(["disconnect", address], timeout: 3)
+        if removeSavedAddress {
+            try? FileManager.default.removeItem(at: addressURL)
+            logger.log("保存済みWi-Fi接続先を破棄")
+        }
     }
 
     private func parseIPv4(from text: String) -> String? {
