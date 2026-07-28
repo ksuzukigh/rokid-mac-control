@@ -20,6 +20,15 @@ enum LowerNavigationItem: Int, CaseIterable {
         (rawValue - LowerNavigationItem.home.rawValue)
             * (screenWidth / 15)
     }
+
+    /// Home画面の下段アイコン位置（Rokidの座標系、左上が原点）。
+    /// タップ位置と選択表示は必ずこの値を共用する。
+    func devicePoint(forScreenWidth width: Int, height: Int) -> CGPoint {
+        CGPoint(
+            x: CGFloat(width) / 2 + CGFloat(horizontalOffset(for: width)),
+            y: CGFloat(height) / 2
+        )
+    }
 }
 
 struct KeyboardNavigationState {

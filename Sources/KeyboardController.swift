@@ -15,6 +15,10 @@ final class KeyboardController {
     private var height = 640
     private let targetPIDLock = NSLock()
     private var scrcpyProcessIdentifier: pid_t?
+    private let modalLock = NSLock()
+    private var isModalPresented = false
+    // Access only from actionQueue.
+    private var launcherStateCache: (value: Bool, checkedAt: Date)?
     // Access only from actionQueue.
     private var navigationState = KeyboardNavigationState()
     var onActivate: (() -> Void)?
@@ -106,6 +110,19 @@ final class KeyboardController {
         targetPIDLock.lock()
         scrcpyProcessIdentifier = processIdentifier
         targetPIDLock.unlock()
+    }
+
+    /// アプリ自身の確認・接続待ち画面では、キーをRokidへ転送しない。
+    func setModalPresented(_ presented: Bool) {
+        modalLock.lock()
+        isModalPresented = presented
+        modalLock.unlock()
+    }
+
+    private func isAppModalPresented() -> Bool {
+        modalLock.lock()
+        defer { modalLock.unlock() }
+        return isModalPresented
     }
 
     private func handle(
@@ -200,8 +217,11 @@ final class KeyboardController {
         // An LSUIElement helper may deliver keystrokes to either its own PID or
         // the regular parent app. Both belong to Rokid Control, while another
         // foreground app retains its own PID and is left untouched.
-        if pid == currentScrcpyPID || pid == ProcessInfo.processInfo.processIdentifier {
+        if pid == currentScrcpyPID {
             return true
+        }
+        if pid == ProcessInfo.processInfo.processIdentifier {
+            return !isAppModalPresented()
         }
         guard let application = NSRunningApplication(processIdentifier: pid) else {
             return false
@@ -282,6 +302,7 @@ final class KeyboardController {
         actionQueue.async { [weak self] in
             guard let self else { return }
             if let item = navigationState.lowerItem {
+                // 下段が最下段なので、これ以上は移動しない。
                 publishNavigationStatus(item)
                 return
             }
@@ -316,7 +337,7 @@ final class KeyboardController {
             }
             _ = navigationState.leaveLowerRow()
             publishNavigationStatus(nil)
-            wakeAndTapLowerItem(item)
+            wakeAndTapHomeRowItem(item)
         }
     }
 
@@ -337,20 +358,29 @@ final class KeyboardController {
             guard let self else { return }
             _ = navigationState.leaveLowerRow()
             publishNavigationStatus(nil)
-            wakeAndTapLowerItem(.home)
+            wakeAndTapHomeRowItem(.home)
         }
     }
 
     private func isLauncherActive() -> Bool {
+        if let cache = launcherStateCache,
+           Date().timeIntervalSince(cache.checkedAt) < 2 {
+            return cache.value
+        }
         let serial = connection.currentSerial()
         let result = connection.runADB([
             "-s", serial, "shell",
             "dumpsys activity activities | grep 'ResumedActivity:'",
-        ], timeout: 1.5)
+        ], timeout: 3)
         if result.timedOut {
-            logger.log("ホーム画面判定がタイムアウト")
+            logger.log("ホーム画面判定がタイムアウト（前回の判定を使用）")
+            return launcherStateCache?.value ?? false
         }
-        return result.output.contains("com.rokid.os.sprite.launcher/")
+        let isLauncher = result.output.contains(
+            "com.rokid.os.sprite.launcher/"
+        )
+        launcherStateCache = (isLauncher, Date())
+        return isLauncher
     }
 
     private func sendKeyEvent(_ androidKey: String) {
@@ -361,7 +391,7 @@ final class KeyboardController {
         logger.log("キー \(androidKey)")
     }
 
-    private func wakeAndTapLowerItem(_ item: LowerNavigationItem) {
+    private func wakeAndTapHomeRowItem(_ item: LowerNavigationItem) {
         let screenSize = currentScreenSize()
         let serial = connection.currentSerial()
         _ = connection.runADB([
@@ -371,11 +401,13 @@ final class KeyboardController {
             "-s", serial, "shell", "input", "keyevent", "KEYCODE_HOME",
         ])
         Thread.sleep(forTimeInterval: 0.35)
-        let x = screenSize.0 / 2
-            + item.horizontalOffset(for: screenSize.0)
+        let point = item.devicePoint(
+            forScreenWidth: screenSize.0,
+            height: screenSize.1
+        )
         _ = connection.runADB([
             "-s", serial, "shell", "input", "tap",
-            "\(x)", "\(screenSize.1 / 2)",
+            "\(Int(point.x))", "\(Int(point.y))",
         ])
         logger.log("下段を開く \(item.title)")
     }

@@ -129,6 +129,9 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
                     let keyboardStarted = DispatchQueue.main.sync {
                         guard !self.isTerminating else { return false }
                         self.keyboard = keyboard
+                        keyboard.setModalPresented(
+                            self.connectingWindow != nil
+                        )
                         keyboard.onActivate = { [weak self] in
                             self?.activateAfterScrcpyClick()
                         }
@@ -206,13 +209,19 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         let logger = self.logger
         workQueue.async { [weak self] in
             connection?.stopMacMode()
-            DispatchQueue.main.async {
+            // terminateLater中はメインのDispatchQueueが進まない場合がある。
+            // RunLoopへ直接積み、終了の返答を必ずAppKitへ返す。
+            CFRunLoopPerformBlock(
+                CFRunLoopGetMain(),
+                CFRunLoopMode.commonModes.rawValue as CFString
+            ) {
                 logger?.log("Rokid Control終了")
                 logger?.close()
                 self?.logger = nil
                 self?.finishTermination()
                 NSApp.reply(toApplicationShouldTerminate: true)
             }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
         }
         return .terminateLater
     }
@@ -615,7 +624,10 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "再接続")
             alert.addButton(withTitle: "終了")
 
-            if alert.runModal() == .alertFirstButtonReturn {
+            self.keyboard?.setModalPresented(true)
+            let response = alert.runModal()
+            self.keyboard?.setModalPresented(false)
+            if response == .alertFirstButtonReturn {
                 self.resetScrcpyRestartCount()
                 self.workQueue.async { [weak self] in
                     self?.reconnectScrcpy(
@@ -731,7 +743,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     }
 
     private func stopLocalResources() {
-        precondition(Thread.isMainThread)
+        dispatchPrecondition(condition: .onQueue(.main))
         closeConnectingWindow()
         removeScrcpyTerminationObserver()
         keyboard?.stop()
@@ -755,7 +767,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     }
 
     private func ensureActivationWindow() {
-        precondition(Thread.isMainThread)
+        dispatchPrecondition(condition: .onQueue(.main))
         guard activationWindow == nil else { return }
 
         let visibleFrame = NSScreen.main?.visibleFrame ?? .zero
@@ -784,14 +796,14 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     }
 
     private func activateRokidControl() {
-        precondition(Thread.isMainThread)
+        dispatchPrecondition(condition: .onQueue(.main))
         ensureActivationWindow()
         activationWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     private func activateAfterScrcpyClick() {
-        precondition(Thread.isMainThread)
+        dispatchPrecondition(condition: .onQueue(.main))
         // The system finishes activating the clicked LSUIElement window after
         // the event tap callback. Reclaim the regular app menu just afterward.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
@@ -807,7 +819,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     private func updateNavigationSelection(
         _ item: LowerNavigationItem?
     ) {
-        precondition(Thread.isMainThread)
+        dispatchPrecondition(condition: .onQueue(.main))
         currentNavigationItem = item
         visionController?.setNavigationSelection(item)
         guard displayMode == .standard, let item else {
@@ -904,12 +916,13 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         let contentWidth = contentHeight * width / height
         let contentLeft = bounds.midX - contentWidth / 2
         let contentTop = bounds.maxY - contentHeight
-        let deviceX = width / 2
-            + CGFloat(item.horizontalOffset(for: screenSize.0))
-        let deviceY = height / 2 + height / 60
+        let devicePoint = item.devicePoint(
+            forScreenWidth: screenSize.0,
+            height: screenSize.1
+        )
         let quartzPoint = CGPoint(
-            x: contentLeft + deviceX / width * contentWidth,
-            y: contentTop + deviceY / height * contentHeight
+            x: contentLeft + devicePoint.x / width * contentWidth,
+            y: contentTop + devicePoint.y / height * contentHeight
         )
         return cocoaPoint(fromQuartzPoint: quartzPoint)
     }
@@ -938,8 +951,9 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     }
 
     private func showConnectingWindow() {
-        precondition(Thread.isMainThread)
+        dispatchPrecondition(condition: .onQueue(.main))
         closeConnectingWindow()
+        keyboard?.setModalPresented(true)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 150),
@@ -1011,10 +1025,11 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     }
 
     private func closeConnectingWindow() {
-        precondition(Thread.isMainThread)
+        dispatchPrecondition(condition: .onQueue(.main))
         connectingWindow?.orderOut(nil)
         connectingWindow = nil
         connectingStatusLabel = nil
+        keyboard?.setModalPresented(false)
     }
 
     private func showTerminationWindowIfNeeded() {
@@ -1153,6 +1168,8 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
 
     private func showFailure(title: String, message: String) {
         closeConnectingWindow()
+        keyboard?.setModalPresented(true)
+        defer { keyboard?.setModalPresented(false) }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = title

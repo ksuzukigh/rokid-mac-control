@@ -89,6 +89,16 @@ chmod 755 \
     "$SCRCPY_MACOS/scrcpy" \
     "$APP_RESOURCES/rokid_wifi_watchdog.sh"
 
+ADB_ARCHS="$(lipo -archs "$BIN/adb")"
+case " $ADB_ARCHS " in
+    *" arm64 "*) ;;
+    *) echo "同梱adbにarm64版がありません: $ADB_ARCHS" >&2; exit 1 ;;
+esac
+case " $ADB_ARCHS " in
+    *" x86_64 "*) ;;
+    *) echo "同梱adbにx86_64版がありません: $ADB_ARCHS" >&2; exit 1 ;;
+esac
+
 codesign --force --sign - "$BIN/adb"
 codesign --force --sign - "$SCRCPY_APP"
 codesign \
