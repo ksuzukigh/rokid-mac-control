@@ -244,18 +244,21 @@ final class RokidConnectionManager {
 
         let pidResult = adb([
             "-s", current, "shell", "cat", remoteWatchdogPID,
-        ], timeout: 1)
-        guard pidResult.succeeded else { return }
+        ], timeout: 2)
         let pid = pidResult.output.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
-        if Int(pid) != nil {
-            _ = adb(["-s", current, "shell", "kill", pid], timeout: 1)
+        if pidResult.succeeded, Int(pid) != nil {
+            _ = adb(["-s", current, "shell", "kill", pid], timeout: 2)
+        } else {
+            logger.log(
+                "監視スクリプトのPIDを取得できませんでした（生存信号の削除で停止させます）"
+            )
         }
         _ = adb([
             "-s", current, "shell", "rm", "-f",
             remoteHeartbeat, remoteWatchdogPID,
-        ], timeout: 1)
+        ], timeout: 2)
         logger.log("Mac操作モード終了")
     }
 

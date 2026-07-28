@@ -26,6 +26,12 @@ enum KeyboardNavigationSelfTest {
         precondition(
             LowerNavigationItem.applications.horizontalOffset(for: 480) == 32
         )
+        let homePoint = LowerNavigationItem.home.devicePoint(
+            forScreenWidth: 480,
+            height: 640
+        )
+        precondition(homePoint.x == 240)
+        precondition(homePoint.y == 320)
         print("Keyboard navigation self-test passed")
     }
 }

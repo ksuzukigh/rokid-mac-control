@@ -116,14 +116,9 @@ final class VisionModeController: NSObject, NSWindowDelegate {
 
     func setNavigationSelection(_ item: LowerNavigationItem?) {
         let point = item.map {
-            CGPoint(
-                x: deviceSize.width / 2
-                    + CGFloat(
-                        $0.horizontalOffset(
-                            for: Int(deviceSize.width)
-                        )
-                    ),
-                y: deviceSize.height / 2 + deviceSize.height / 60
+            $0.devicePoint(
+                forScreenWidth: Int(deviceSize.width),
+                height: Int(deviceSize.height)
             )
         }
         displayView?.showNavigationHighlight(at: point)

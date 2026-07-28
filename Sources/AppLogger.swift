@@ -31,7 +31,7 @@ final class AppLogger {
         let size = attributes[.size] as? NSNumber,
         size.intValue > Self.maximumLogSize {
             try? FileManager.default.removeItem(at: rotatedURL)
-            try FileManager.default.moveItem(at: logURL, to: rotatedURL)
+            try? FileManager.default.moveItem(at: logURL, to: rotatedURL)
         }
         if !FileManager.default.fileExists(atPath: logURL.path) {
             _ = FileManager.default.createFile(
