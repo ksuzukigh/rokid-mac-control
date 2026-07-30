@@ -81,35 +81,16 @@ final class RokidConnectionManager {
         // require changing the glasses' Wi-Fi state.
         if let usbSerial = findUSBDevice() {
             onProgress("Rokidに接続しています…")
-            // ケーブルがつながっている今のうちに、暗号化された無線接続を用意する。
-            // ここを飛ばすと、USBで復旧したあとずっとUSBのままになってしまう。
-            prepareSecureWirelessDebugging(usbSerial)
-            for _ in 0..<8 {
-                try checkCancellation(isCancelled)
-                Thread.sleep(forTimeInterval: 1)
-                if let discovered = connectToDiscoveredRokid(
-                    onProgress: onProgress
-                ) {
-                    return discovered
-                }
-            }
-            return useUSB(usbSerial)
+            return try migrateToSecureWiFi(
+                usbSerial: usbSerial,
+                onProgress: onProgress,
+                isCancelled: isCancelled
+            )
         }
 
         try checkCancellation(isCancelled)
-        if let saved = readSavedAddress(), connect(saved) {
-            onProgress("Rokidに接続しています…")
-            if isRokidDevice(saved) {
-                return use(saved)
-            }
-            rejectWiFiDevice(saved, removeSavedAddress: true)
-        }
-
-        try checkCancellation(isCancelled)
-        if let discovered = connectToDiscoveredRokid(
-            onProgress: onProgress
-        ) {
-            return discovered
+        if let connected = connectToSecureWiFi(onProgress: onProgress) {
+            return connected
         }
 
         logger.log("Wi-Fi接続またはUSB接続を待っています")
@@ -117,10 +98,8 @@ final class RokidConnectionManager {
         while Date() < deadline {
             try checkCancellation(isCancelled)
             onProgress("Rokidを探しています…")
-            if let discovered = connectToDiscoveredRokid(
-                onProgress: onProgress
-            ) {
-                return discovered
+            if let connected = connectToSecureWiFi(onProgress: onProgress) {
+                return connected
             }
 
             if let usbSerial = findUSBDevice() {
@@ -134,6 +113,34 @@ final class RokidConnectionManager {
         }
 
         throw RokidConnectionError.noDevice
+    }
+
+    /// USBがつながっているときに、暗号化された無線接続を用意して移行する。
+    ///
+    /// 移行できないときは暗号化なしへ落とさず、USB接続のまま続ける。
+    /// 起動時と再接続時の両方から呼ぶ。片方だけ直すとUSBに固定される。
+    /// `attempts`は探索の繰り返し回数。Wi-Fiを復旧させたあとの経路
+    /// （`recoverWiFiUsingUSB`）は告知が遅れやすいため多めに待つ。
+    private func migrateToSecureWiFi(
+        usbSerial: String,
+        recent: String? = nil,
+        attempts: Int = 8,
+        onProgress: (String) -> Void = { _ in },
+        isCancelled: () -> Bool = { false }
+    ) throws -> String {
+        prepareSecureWirelessDebugging(usbSerial)
+        for _ in 0..<attempts {
+            try checkCancellation(isCancelled)
+            Thread.sleep(forTimeInterval: 1)
+            if let connected = connectToSecureWiFi(
+                recent: recent,
+                onProgress: onProgress
+            ) {
+                return connected
+            }
+        }
+        logger.log("暗号化接続を用意できないためUSB接続を継続します")
+        return useUSB(usbSerial)
     }
 
     func reconnect(
@@ -155,22 +162,24 @@ final class RokidConnectionManager {
             oldSerial = ""
         }
 
+        // 直前がUSB接続だった場合、そのシリアルは接続先候補にならない。
+        let recentWiFi = oldSerial.contains(":") ? oldSerial : nil
+
         for _ in 0..<20 {
             if isCancelled() {
                 return nil
             }
             if let usbSerial = findUSBDevice() {
-                return useUSB(usbSerial)
+                // USBへ退避した場合も、暗号化された無線接続を用意し直して戻る。
+                // ここでUSBを返して終えると、以後ずっとUSBのままになる。
+                return try? migrateToSecureWiFi(
+                    usbSerial: usbSerial,
+                    recent: recentWiFi,
+                    isCancelled: isCancelled
+                )
             }
-            if oldSerial.contains(":") && connect(oldSerial) {
-                if isRokidDevice(oldSerial) {
-                    return use(oldSerial)
-                }
-                rejectWiFiDevice(oldSerial, removeSavedAddress: true)
-                oldSerial = ""
-            }
-            if let discovered = connectToDiscoveredRokid() {
-                return discovered
+            if let connected = connectToSecureWiFi(recent: recentWiFi) {
+                return connected
             }
             Thread.sleep(forTimeInterval: 1)
         }
@@ -424,16 +433,96 @@ final class RokidConnectionManager {
         return nil
     }
 
-    private func connectToDiscoveredRokid(
+    /// 接続先の候補と、その出どころ。
+    private struct WiFiCandidate {
+        let address: String
+        /// 保存済みの接続先。Rokidでなければ記録を消す。
+        let isSaved: Bool
+        /// このアプリが繋いだのではなく、もともと`adb devices`にあったもの。
+        /// Rokidでなくても切断しない（利用者が別の用途で使っている可能性がある）。
+        let wasAlreadyConnected: Bool
+    }
+
+    /// 暗号化された無線接続の候補を、優先順に並べて返す。
+    ///
+    /// 起動時と再接続時で共通の並びにする。重複は除き、`adb tcpip 5555`が作る
+    /// 暗号化なしの固定5555番はどの経路から来ても含めない。
+    ///
+    /// 1. 直前の接続先（再接続時のみ。起動時は`recent`にnilを渡す）
+    /// 2. 保存済みの接続先
+    /// 3. `adb devices`にすでに繋がっているネットワーク接続先
+    /// 4. `_adb-tls-connect._tcp`のmDNS探索結果
+    private func secureWiFiCandidates(recent: String? = nil) -> [WiFiCandidate] {
+        let saved = readSavedAddress()
+        let alreadyConnected = connectedNetworkDevices()
+        let alreadyConnectedSet = Set(alreadyConnected)
+
+        var ordered: [String] = []
+        func add(_ address: String?) {
+            guard
+                let address,
+                address.contains(":"),
+                !isUnencryptedAddress(address),
+                !ordered.contains(address)
+            else {
+                return
+            }
+            ordered.append(address)
+        }
+
+        add(recent)
+        add(saved)
+        alreadyConnected.forEach(add)
+        discoverSecureWiFi().forEach(add)
+
+        return ordered.map { address in
+            WiFiCandidate(
+                address: address,
+                isSaved: address == saved,
+                wasAlreadyConnected: alreadyConnectedSet.contains(address)
+            )
+        }
+    }
+
+    /// `adb devices`にすでに繋がっているネットワーク接続先。
+    ///
+    /// mDNSが一時的に見えないときでも、既存の暗号化接続を拾い直せるようにする。
+    private func connectedNetworkDevices() -> [String] {
+        let output = adb(["devices"], timeout: 3).output
+        var addresses: [String] = []
+        for line in output.split(whereSeparator: \.isNewline) {
+            let fields = line.split(whereSeparator: \.isWhitespace)
+            guard fields.count >= 2, fields[1] == "device" else { continue }
+            let candidate = String(fields[0])
+            guard candidate.contains(":") else { continue }
+            addresses.append(candidate)
+        }
+        return addresses
+    }
+
+    /// 候補を順に試し、Rokidだと確認できた最初の接続先を採用する。
+    private func connectToSecureWiFi(
+        recent: String? = nil,
         onProgress: (String) -> Void = { _ in }
     ) -> String? {
-        for address in discoverSecureWiFi() {
+        for candidate in secureWiFiCandidates(recent: recent) {
             onProgress("Rokidに接続しています…")
-            guard connect(address) else { continue }
-            if isRokidDevice(address) {
-                return use(address)
+            guard connect(candidate.address) else { continue }
+            if isRokidDevice(candidate.address) {
+                return use(candidate.address)
             }
-            rejectWiFiDevice(address)
+            // もともと繋がっていた接続は、Rokidでなくても切らない。
+            // 利用者が別の端末を自分で繋いでいることがあるため。
+            guard !candidate.wasAlreadyConnected else {
+                logger.log(
+                    "Rokid以外の接続済み端末はそのままにします serial=\(candidate.address)"
+                )
+                continue
+            }
+            rejectWiFiDevice(
+                candidate.address,
+                removeSavedAddress: candidate.isSaved
+            )
         }
         return nil
     }
@@ -534,6 +623,9 @@ final class RokidConnectionManager {
             ], timeout: 5)
 
             for _ in 0..<3 {
+                // この繰り返しは待ち時間が長い。ここで確認しないと、
+                // キャンセルしてから最大10秒ほど反応しなくなる。
+                try checkCancellation(isCancelled)
                 Thread.sleep(forTimeInterval: 2)
                 _ = adb([
                     "-s", usbSerial, "shell", "input", "keyevent",
@@ -594,20 +686,11 @@ final class RokidConnectionManager {
         // 代わりにAndroid標準のワイヤレスデバッグ（TLS）を有効にし、
         // 初回USB認証で登録済みのMacの鍵で繋ぐ。
         logger.log("暗号化された無線接続を用意します ip=\(ipAddress)")
-        prepareSecureWirelessDebugging(usbSerial)
-
-        // 待ち受けの準備とmDNSの告知には少し時間がかかる。
-        for _ in 0..<15 {
-            try checkCancellation(isCancelled)
-            Thread.sleep(forTimeInterval: 1)
-            if let discovered = connectToDiscoveredRokid() {
-                return discovered
-            }
-        }
-
-        // TLSで繋げないときは、暗号化なしへ落とさずUSB接続のまま続ける。
-        logger.log("暗号化接続を用意できないためUSB接続を継続します")
-        return useUSB(usbSerial)
+        return try migrateToSecureWiFi(
+            usbSerial: usbSerial,
+            attempts: 15,
+            isCancelled: isCancelled
+        )
     }
 
     private func checkCancellation(
@@ -639,7 +722,7 @@ final class RokidConnectionManager {
 
     private func rejectWiFiDevice(
         _ address: String,
-        removeSavedAddress: Bool = false
+        removeSavedAddress: Bool
     ) {
         logger.log("Rokid以外の接続先を拒否 serial=\(address)")
         _ = adb(["disconnect", address], timeout: 3)
@@ -676,7 +759,9 @@ final class RokidConnectionManager {
     // 控えと復元のうえで再導入する（履歴に実装が残っている）。
 
     /// 設定を変更していた版が残した控えがあれば、元の値へ戻す。
-    private func restoreScreenTimeoutFromBackup(_ serial: String) {
+    ///
+    /// 引数名を`serial`にすると同名のプロパティを覆い隠すため、別の名前にする。
+    private func restoreScreenTimeoutFromBackup(_ deviceSerial: String) {
         guard
             let original = try? String(
                 contentsOf: screenTimeoutBackupURL,
@@ -687,7 +772,7 @@ final class RokidConnectionManager {
             return
         }
         let result = adb([
-            "-s", serial, "shell", "settings", "put", "system",
+            "-s", deviceSerial, "shell", "settings", "put", "system",
             "screen_off_timeout", original,
         ], timeout: 5)
         // 書き戻せなかったときは控えを残す。次回起動でもう一度やり直せる。

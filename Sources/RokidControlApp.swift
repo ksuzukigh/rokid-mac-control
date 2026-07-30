@@ -234,9 +234,16 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
 
         stopLocalResources()
         showTerminationWindowIfNeeded()
+        // 実行中のADBを止める。接続処理と終了処理は同じ直列キューを使うため、
+        // 止めないと長いADB待機が終わるまで終了処理が始まらない。
+        runner?.cancel()
         let connection = self.connection
         let logger = self.logger
+        let runner = self.runner
         workQueue.async { [weak self] in
+            // 直列キューなので、ここに来た時点で接続処理は終わっている。
+            // 後片付けのADBを実行できるようキャンセル状態を解除する。
+            runner?.resumeAfterCancellation()
             connection?.stopMacMode()
             // terminateLater中はメインのDispatchQueueが進まない場合がある。
             // RunLoopへ直接積み、終了の返答を必ずAppKitへ返す。
@@ -1294,6 +1301,9 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         stateLock.lock()
         connectionCancelled = true
         stateLock.unlock()
+        // フラグを立てるだけでは、実行中のADBが終わるまで止まらない。
+        // 実行中のプロセスへも伝え、終了処理がその後ろで詰まらないようにする。
+        runner?.cancel()
         connectingStatusLabel?.stringValue = "キャンセルしています…"
         NSApp.terminate(nil)
     }
