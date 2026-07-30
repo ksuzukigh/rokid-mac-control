@@ -13,22 +13,6 @@ protocol RokidCommandSink: AnyObject {
     func send(_ command: RokidCommand)
 }
 
-/// キーを送る前にRokidを起こす必要があるかを判断する。
-///
-/// `dumpsys power`を読めなかった場合も、利用者が押した1回だけ起動信号を送る。
-/// 定期送信は行わないため、以前のような周期的な音は発生しない。
-enum DeviceWakePolicy {
-    static func shouldWake(powerOutput: String) -> Bool {
-        guard let wakefulness = powerOutput
-            .split(whereSeparator: \.isNewline)
-            .first(where: { $0.contains("mWakefulness=") })
-        else {
-            return true
-        }
-        return !wakefulness.contains("mWakefulness=Awake")
-    }
-}
-
 /// Macで押されたキーのうち、Rokid操作に関係するものだけを表す。
 ///
 /// OSの仮想キーコードはここに持ち込まない。キーコードの読み取りは

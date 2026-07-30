@@ -5,6 +5,7 @@ enum RokidConnectionError: LocalizedError {
     case noDevice
     case wifiUnavailable
     case watchdogFailed
+    case screenTimeoutFailed
     case cancelled
     case plaintextListenerRemains
     case safetyUnverified
@@ -23,6 +24,8 @@ enum RokidConnectionError: LocalizedError {
             return "RokidをWi-Fiへ接続できませんでした。"
         case .watchdogFailed:
             return "Mac操作中のWi-Fi監視を開始できませんでした。"
+        case .screenTimeoutFailed:
+            return "Mac操作中の画面休止を安全に設定できませんでした。Mac操作を開始せず、保存済みの元の設定は次回起動時にも復元します。"
         case .cancelled:
             return "接続をキャンセルしました。"
         }
@@ -297,16 +300,18 @@ final class RokidConnectionManager {
         }
 
         // 前回が異常終了だった場合に備え、控えが残っていれば元へ戻す。
-        restoreScreenTimeoutFromBackup(current)
+        _ = restoreScreenTimeoutFromBackup(current)
+        let originalScreenTimeout = try saveOriginalScreenTimeout(current)
 
-        // 画面消灯までの時間は、現在は変更していない。
-        // RV101ではこの設定がHUDの表示を左右せず、変更しなくても
-        // Mac操作が続けられることを実機で確認したため。
-        // 第2引数は「監視スクリプトが終了時に戻すべき値」で、空なら何もしない。
-        let launch = "setsid sh '\(remoteWatchdog)' 20 '' </dev/null >/dev/null 2>&1 &"
+        // 端末側の監視を先に起動する。設定変更後にMac側が異常終了しても、
+        // 生存信号が止まれば端末自身が元の値へ戻せるようにするため。
+        let launch =
+            "setsid sh '\(remoteWatchdog)' 20 '\(originalScreenTimeout)'"
+                + " </dev/null >/dev/null 2>&1 &"
         guard adb([
             "-s", current, "shell", launch,
         ], timeout: 5).succeeded else {
+            _ = restoreScreenTimeoutFromBackup(current)
             throw RokidConnectionError.watchdogFailed
         }
         Thread.sleep(forTimeInterval: 1)
@@ -315,7 +320,14 @@ final class RokidConnectionManager {
             "-s", current, "shell", "cat", remoteWatchdogPID,
         ], timeout: 3).output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Int(newPID) != nil else {
+            _ = restoreScreenTimeoutFromBackup(current)
             throw RokidConnectionError.watchdogFailed
+        }
+
+        guard applyMacModeScreenTimeout(current) else {
+            _ = adb(["-s", current, "shell", "kill", newPID], timeout: 2)
+            _ = restoreScreenTimeoutFromBackup(current)
+            throw RokidConnectionError.screenTimeoutFailed
         }
 
         let timer = DispatchSource.makeTimerSource(
@@ -357,7 +369,7 @@ final class RokidConnectionManager {
             "-s", current, "shell", "rm", "-f",
             remoteHeartbeat, remoteWatchdogPID,
         ], timeout: 2)
-        restoreScreenTimeoutFromBackup(current)
+        _ = restoreScreenTimeoutFromBackup(current)
         logger.log("Mac操作モード終了")
     }
 
@@ -980,39 +992,99 @@ final class RokidConnectionManager {
 
     // MARK: - 画面消灯の設定
 
-    // このアプリはRokidの`screen_off_timeout`を変更しない。
-    //
-    // 当初は、Mac操作中にRokidの画面が消えないよう24時間へ伸ばしていた。
-    // しかしRV101で実測したところ、Androidとしてはスリープ状態になっても
-    // HUDの表示は続いており、この設定はHUDの点灯・消灯を決めていなかった。
-    // 利用者もMac操作中に画面が落ちて困った経験がないため、端末の設定を
-    // 書き換えない方針に戻した。長時間の放置で接続が切れる事例が出た場合は、
-    // 控えと復元のうえで再導入する（履歴に実装が残っている）。
+    // HUDの表示自体はAndroidがスリープしても続くが、方向キーは無視される。
+    // Mac操作中だけ24時間へ延長し、正常終了・端末側監視・次回起動の
+    // 3経路で元の値へ戻す。
+
+    /// 現在値を検証して、設定変更より先にMacへ保存する。
+    private func saveOriginalScreenTimeout(
+        _ deviceSerial: String
+    ) throws -> String {
+        let result = adb([
+            "-s", deviceSerial, "shell", "settings", "get", "system",
+            "screen_off_timeout",
+        ], timeout: 5)
+        guard result.succeeded,
+              let original = ScreenTimeoutPolicy.originalValue(
+                  from: result.output
+              )
+        else {
+            logger.log(
+                "画面消灯までの時間を読み取れませんでした output=\(result.output)"
+            )
+            throw RokidConnectionError.screenTimeoutFailed
+        }
+        do {
+            try original.write(
+                to: screenTimeoutBackupURL,
+                atomically: true,
+                encoding: .utf8
+            )
+        } catch {
+            logger.log("画面消灯までの時間を保存できませんでした")
+            throw RokidConnectionError.screenTimeoutFailed
+        }
+        return original
+    }
+
+    /// 保存と端末側監視が完了したあとで、Mac操作中の値へ変更して検証する。
+    private func applyMacModeScreenTimeout(_ deviceSerial: String) -> Bool {
+        let target = ScreenTimeoutPolicy.macModeValue
+        let changed = adb([
+            "-s", deviceSerial, "shell", "settings", "put", "system",
+            "screen_off_timeout", target,
+        ], timeout: 5)
+        let verified = adb([
+            "-s", deviceSerial, "shell", "settings", "get", "system",
+            "screen_off_timeout",
+        ], timeout: 5)
+        guard changed.succeeded,
+              ScreenTimeoutPolicy.originalValue(from: verified.output) == target
+        else {
+            logger.log(
+                "画面消灯までの時間を変更・確認できませんでした output=\(verified.output)"
+            )
+            return false
+        }
+        logger.log("画面消灯までの時間を一時変更 \(target)")
+        return true
+    }
 
     /// 設定を変更していた版が残した控えがあれば、元の値へ戻す。
     ///
     /// 引数名を`serial`にすると同名のプロパティを覆い隠すため、別の名前にする。
-    private func restoreScreenTimeoutFromBackup(_ deviceSerial: String) {
+    @discardableResult
+    private func restoreScreenTimeoutFromBackup(
+        _ deviceSerial: String
+    ) -> Bool {
         guard
-            let original = try? String(
+            let saved = try? String(
                 contentsOf: screenTimeoutBackupURL,
                 encoding: .utf8
-            ).trimmingCharacters(in: .whitespacesAndNewlines),
-            Int(original) != nil
+            ),
+            let original = ScreenTimeoutPolicy.originalValue(from: saved)
         else {
-            return
+            return true
         }
         let result = adb([
             "-s", deviceSerial, "shell", "settings", "put", "system",
             "screen_off_timeout", original,
         ], timeout: 5)
+        let verified = adb([
+            "-s", deviceSerial, "shell", "settings", "get", "system",
+            "screen_off_timeout",
+        ], timeout: 5)
         // 書き戻せなかったときは控えを残す。次回起動でもう一度やり直せる。
-        guard result.succeeded else {
+        guard result.succeeded,
+              ScreenTimeoutPolicy.originalValue(from: verified.output)
+                == original
+        else {
             logger.log("画面消灯までの時間を復元できませんでした（控えは残します）")
-            return
+            return false
         }
         try? FileManager.default.removeItem(at: screenTimeoutBackupURL)
         logger.log("画面消灯までの時間を復元 \(original)")
+        return true
     }
 
     private func stopHeartbeat() {
