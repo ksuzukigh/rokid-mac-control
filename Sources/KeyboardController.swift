@@ -2,6 +2,82 @@ import AppKit
 import ApplicationServices
 import Foundation
 
+/// Rokidの画面サイズを複数のスレッドから安全に読み書きする入れ物。
+private final class ScreenSizeStore {
+    private let lock = NSLock()
+    private var size = (480, 640)
+
+    func get() -> (Int, Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return size
+    }
+
+    func set(_ newValue: (Int, Int)) {
+        lock.lock()
+        size = newValue
+        lock.unlock()
+    }
+}
+
+/// キーボード操作をADB経由でRokidへ届ける。
+///
+/// `KeyboardCommandRouter`から呼ばれる。命令の並びを決めるのはRouter側で、
+/// ここは実際にADBを実行するだけに絞ってある。
+private final class ADBCommandSink: RokidCommandSink {
+    private let connection: RokidConnectionManager
+    private let logger: AppLogger
+    private let screenSize: ScreenSizeStore
+
+    init(
+        connection: RokidConnectionManager,
+        logger: AppLogger,
+        screenSize: ScreenSizeStore
+    ) {
+        self.connection = connection
+        self.logger = logger
+        self.screenSize = screenSize
+    }
+
+    func send(_ command: RokidCommand) {
+        switch command {
+        case .keyEvent(let androidKey):
+            sendKeyEvent(androidKey)
+        case .openShortcut(let shortcut):
+            openShortcut(shortcut)
+        }
+    }
+
+    private func sendKeyEvent(_ androidKey: String) {
+        let serial = connection.currentSerial()
+        _ = connection.runADB([
+            "-s", serial, "shell", "input", "keyevent", androidKey,
+        ])
+        logger.log("キー \(androidKey)")
+    }
+
+    private func openShortcut(_ shortcut: LauncherShortcut) {
+        let size = screenSize.get()
+        let serial = connection.currentSerial()
+        _ = connection.runADB([
+            "-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP",
+        ])
+        _ = connection.runADB([
+            "-s", serial, "shell", "input", "keyevent", "KEYCODE_HOME",
+        ])
+        Thread.sleep(forTimeInterval: 0.35)
+        let point = shortcut.devicePoint(
+            forScreenWidth: size.0,
+            height: size.1
+        )
+        _ = connection.runADB([
+            "-s", serial, "shell", "input", "tap",
+            "\(Int(point.x))", "\(Int(point.y))",
+        ])
+        logger.log("下段を開く \(shortcut.title)")
+    }
+}
+
 final class KeyboardController {
     private let connection: RokidConnectionManager
     private let logger: AppLogger
@@ -9,20 +85,16 @@ final class KeyboardController {
     private let actionQueue = DispatchQueue(label: "RokidControl.KeyboardActions")
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var pendingSpace: DispatchWorkItem?
-    private let screenSizeLock = NSLock()
-    private var width = 480
-    private var height = 640
+    private let screenSize: ScreenSizeStore
     private let targetPIDLock = NSLock()
     private var scrcpyProcessIdentifier: pid_t?
     private let modalLock = NSLock()
     private var isModalPresented = false
     // Access only from actionQueue.
-    private var launcherStateCache: (value: Bool, checkedAt: Date)?
-    // Access only from actionQueue.
-    private var navigationState = KeyboardNavigationState()
+    private let router: KeyboardCommandRouter
     var onActivate: (() -> Void)?
-    var onNavigationSelection: ((LowerNavigationItem?) -> Void)?
+    /// アプリ一覧を選んでいる間だけ`true`。操作案内の切り替えに使う。
+    var onAppSelectionChanged: ((Bool) -> Void)?
     var onQuit: (() -> Void)?
 
     init(
@@ -33,23 +105,36 @@ final class KeyboardController {
         self.connection = connection
         self.logger = logger
         self.scrcpyAppURL = scrcpyAppURL.standardizedFileURL
+
+        let screenSize = ScreenSizeStore()
+        self.screenSize = screenSize
+        let sink = ADBCommandSink(
+            connection: connection,
+            logger: logger,
+            screenSize: screenSize
+        )
+        router = KeyboardCommandRouter(sink: sink)
+        router.onSelectionChanged = { [weak self] isSelecting in
+            guard let self else { return }
+            logger.log(
+                isSelecting ? "アプリ一覧の選択を開始" : "アプリ一覧の選択を終了"
+            )
+            DispatchQueue.main.async { [weak self] in
+                self?.onAppSelectionChanged?(isSelecting)
+            }
+        }
     }
 
     @discardableResult
     func updateScreenSize() -> (Int, Int) {
         let size = connection.getScreenSize()
-        screenSizeLock.lock()
-        width = size.0
-        height = size.1
-        screenSizeLock.unlock()
+        screenSize.set(size)
         logger.log("画面サイズ \(size.0)x\(size.1)")
         return size
     }
 
     func currentScreenSize() -> (Int, Int) {
-        screenSizeLock.lock()
-        defer { screenSizeLock.unlock() }
-        return (width, height)
+        screenSize.get()
     }
 
     func start() -> Bool {
@@ -94,8 +179,6 @@ final class KeyboardController {
     }
 
     func stop() {
-        pendingSpace?.cancel()
-        pendingSpace = nil
         if let source = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
         }
@@ -142,7 +225,7 @@ final class KeyboardController {
             // previously active app. Use the actual frontmost window under the
             // pointer so covered scrcpy regions do not steal focus.
             if pointTargetsScrcpyWindow(event.location) {
-                resetNavigationMode()
+                endAppSelection()
                 DispatchQueue.main.async { [weak self] in
                     self?.onActivate?()
                 }
@@ -168,44 +251,52 @@ final class KeyboardController {
             return nil
         }
 
-        let handled: Bool
-        switch keyCode {
-        case 123:
-            handleHorizontalNavigation(
-                offset: -1,
-                upperRowKey: "KEYCODE_DPAD_LEFT"
-            )
-            handled = true
-        case 124:
-            handleHorizontalNavigation(
-                offset: 1,
-                upperRowKey: "KEYCODE_DPAD_RIGHT"
-            )
-            handled = true
-        case 125:
-            handleDownNavigation()
-            handled = true
-        case 126:
-            handleUpNavigation()
-            handled = true
-        case 49:
-            resetNavigationMode()
-            handleSpace()
-            handled = true
-        case 36, 76:
-            handleEnter()
-            handled = true
-        case 53:
-            handleBack()
-            handled = true
-        case 4:
-            openHome()
-            handled = true
-        default:
-            handled = false
+        guard let key = Self.rokidKey(forKeyCode: keyCode, flags: event.flags)
+        else {
+            // Spaceを含め、割り当てのないキーはそのままmacOSへ渡す。
+            return Unmanaged.passUnretained(event)
         }
 
-        return handled ? nil : Unmanaged.passUnretained(event)
+        actionQueue.async { [weak self] in
+            self?.router.handle(key)
+        }
+        return nil
+    }
+
+    /// OSの仮想キーコードをRokid操作の意味へ変換する。
+    ///
+    /// 修飾キーを伴う入力は、Macのショートカット（⌘A など）を邪魔しないよう
+    /// Rokid操作として扱わない。Spaceには何も割り当てない。
+    private static func rokidKey(
+        forKeyCode keyCode: Int64,
+        flags: CGEventFlags
+    ) -> RokidKey? {
+        let hasModifier = flags.contains(.maskCommand)
+            || flags.contains(.maskControl)
+            || flags.contains(.maskAlternate)
+
+        switch keyCode {
+        case 123:
+            return hasModifier ? nil : .left
+        case 124:
+            return hasModifier ? nil : .right
+        case 125:
+            return hasModifier ? nil : .down
+        case 126:
+            return hasModifier ? nil : .up
+        case 36, 76:
+            return hasModifier ? nil : .enter
+        case 53:
+            return hasModifier ? nil : .escape
+        case 4:
+            return hasModifier ? nil : .home
+        case 46:
+            return hasModifier ? nil : .memo
+        case 0:
+            return hasModifier ? nil : .applications
+        default:
+            return nil
+        }
     }
 
     private func eventTargetsScrcpy(_ event: CGEvent) -> Bool {
@@ -273,194 +364,10 @@ final class KeyboardController {
         return false
     }
 
-    func resetNavigationMode() {
+    /// マウス操作などでアプリ一覧の選択状態を終える。
+    func endAppSelection() {
         actionQueue.async { [weak self] in
-            guard let self else { return }
-            if navigationState.leaveLowerRow() {
-                publishNavigationStatus(nil)
-                logger.log("キーボード選択 上段")
-            }
-        }
-    }
-
-    private func handleHorizontalNavigation(
-        offset: Int,
-        upperRowKey: String
-    ) {
-        actionQueue.async { [weak self] in
-            guard let self else { return }
-            if let item = navigationState.moveLowerRow(by: offset) {
-                publishNavigationStatus(item)
-                logger.log("キーボード選択 下段 \(item.title)")
-                return
-            }
-            sendKeyEvent(upperRowKey)
-        }
-    }
-
-    private func handleDownNavigation() {
-        actionQueue.async { [weak self] in
-            guard let self else { return }
-            if let item = navigationState.lowerItem {
-                // 下段が最下段なので、これ以上は移動しない。
-                publishNavigationStatus(item)
-                return
-            }
-            guard isLauncherActive() else {
-                sendKeyEvent("KEYCODE_DPAD_DOWN")
-                return
-            }
-            let item = navigationState.enterLowerRow()
-            publishNavigationStatus(item)
-            logger.log("キーボード選択 下段 \(item.title)")
-        }
-    }
-
-    private func handleUpNavigation() {
-        actionQueue.async { [weak self] in
-            guard let self else { return }
-            if navigationState.leaveLowerRow() {
-                publishNavigationStatus(nil)
-                logger.log("キーボード選択 上段")
-                return
-            }
-            sendKeyEvent("KEYCODE_DPAD_UP")
-        }
-    }
-
-    private func handleEnter() {
-        actionQueue.async { [weak self] in
-            guard let self else { return }
-            guard let item = navigationState.lowerItem else {
-                sendKeyEvent("KEYCODE_ENTER")
-                return
-            }
-            _ = navigationState.leaveLowerRow()
-            publishNavigationStatus(nil)
-            wakeAndTapHomeRowItem(item)
-        }
-    }
-
-    private func handleBack() {
-        actionQueue.async { [weak self] in
-            guard let self else { return }
-            if navigationState.leaveLowerRow() {
-                publishNavigationStatus(nil)
-                logger.log("キーボード選択 上段")
-                return
-            }
-            sendKeyEvent("KEYCODE_BACK")
-        }
-    }
-
-    private func openHome() {
-        actionQueue.async { [weak self] in
-            guard let self else { return }
-            _ = navigationState.leaveLowerRow()
-            publishNavigationStatus(nil)
-            wakeAndTapHomeRowItem(.home)
-        }
-    }
-
-    private func isLauncherActive() -> Bool {
-        if let cache = launcherStateCache,
-           Date().timeIntervalSince(cache.checkedAt) < 2 {
-            return cache.value
-        }
-        let serial = connection.currentSerial()
-        let result = connection.runADB([
-            "-s", serial, "shell",
-            "dumpsys activity activities | grep 'ResumedActivity:'",
-        ], timeout: 3)
-        if result.timedOut {
-            logger.log("ホーム画面判定がタイムアウト（前回の判定を使用）")
-            return launcherStateCache?.value ?? false
-        }
-        let isLauncher = result.output.contains(
-            "com.rokid.os.sprite.launcher/"
-        )
-        launcherStateCache = (isLauncher, Date())
-        return isLauncher
-    }
-
-    private func sendKeyEvent(_ androidKey: String) {
-        let serial = connection.currentSerial()
-        _ = connection.runADB([
-            "-s", serial, "shell", "input", "keyevent", androidKey,
-        ])
-        logger.log("キー \(androidKey)")
-    }
-
-    private func wakeAndTapHomeRowItem(_ item: LowerNavigationItem) {
-        let screenSize = currentScreenSize()
-        let serial = connection.currentSerial()
-        _ = connection.runADB([
-            "-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP",
-        ])
-        _ = connection.runADB([
-            "-s", serial, "shell", "input", "keyevent", "KEYCODE_HOME",
-        ])
-        Thread.sleep(forTimeInterval: 0.35)
-        let point = item.devicePoint(
-            forScreenWidth: screenSize.0,
-            height: screenSize.1
-        )
-        _ = connection.runADB([
-            "-s", serial, "shell", "input", "tap",
-            "\(Int(point.x))", "\(Int(point.y))",
-        ])
-        logger.log("下段を開く \(item.title)")
-    }
-
-    private func publishNavigationStatus(_ item: LowerNavigationItem?) {
-        DispatchQueue.main.async { [weak self] in
-            self?.onNavigationSelection?(item)
-        }
-    }
-
-    private func handleSpace() {
-        if let pendingSpace {
-            pendingSpace.cancel()
-            self.pendingSpace = nil
-            doubleTapCenter()
-            return
-        }
-
-        let item = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.pendingSpace = nil
-            self.tapCenter()
-        }
-        pendingSpace = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: item)
-    }
-
-    private func tapCenter() {
-        actionQueue.async { [weak self] in
-            guard let self else { return }
-            let screenSize = currentScreenSize()
-            let serial = connection.currentSerial()
-            _ = connection.runADB([
-                "-s", serial, "shell", "input", "tap",
-                "\(screenSize.0 / 2)", "\(screenSize.1 / 2)",
-            ])
-            logger.log("中央タップ")
-        }
-    }
-
-    private func doubleTapCenter() {
-        actionQueue.async { [weak self] in
-            guard let self else { return }
-            let screenSize = currentScreenSize()
-            let serial = connection.currentSerial()
-            let arguments = [
-                "-s", serial, "shell", "input", "tap",
-                "\(screenSize.0 / 2)", "\(screenSize.1 / 2)",
-            ]
-            _ = connection.runADB(arguments)
-            Thread.sleep(forTimeInterval: 0.08)
-            _ = connection.runADB(arguments)
-            logger.log("中央ダブルタップ")
+            self?.router.endSelection()
         }
     }
 }

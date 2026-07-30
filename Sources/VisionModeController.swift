@@ -114,14 +114,8 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         onClose()
     }
 
-    func setNavigationSelection(_ item: LowerNavigationItem?) {
-        let point = item.map {
-            $0.devicePoint(
-                forScreenWidth: Int(deviceSize.width),
-                height: Int(deviceSize.height)
-            )
-        }
-        displayView?.showNavigationHighlight(at: point)
+    func setAppSelection(_ isSelectingApp: Bool) {
+        displayView?.setAppSelection(isSelectingApp)
     }
 
     private func createVisionWindow() {
@@ -148,11 +142,11 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         )
         displayView.autoresizingMask = [.width, .height]
         displayView.onTap = { [weak self] x, y in
-            self?.keyboard.resetNavigationMode()
+            self?.keyboard.endAppSelection()
             self?.sendTap(x: x, y: y)
         }
         displayView.onBack = { [weak self] in
-            self?.keyboard.resetNavigationMode()
+            self?.keyboard.endAppSelection()
             self?.sendKey("KEYCODE_BACK")
         }
         window.contentView = displayView
@@ -191,7 +185,9 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             action: #selector(visibilityChanged(_:))
         )
         slider.isContinuous = true
-        slider.toolTip = "文字とアイコンの明るさ・太さを調整します"
+        // 矢印キーはRokidの操作へ回すため、このスライダーはマウス操作だけにする。
+        slider.refusesFirstResponder = true
+        slider.toolTip = "文字とアイコンの明るさ・太さを調整します（マウスで動かします）"
         slider.widthAnchor.constraint(equalToConstant: 185).isActive = true
 
         let stack = NSStackView(views: [title, light, slider, strong])
@@ -237,6 +233,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
                 "--no-audio",
                 "--max-fps=15",
                 "--keyboard=disabled",
+                // 画面休止防止はRokidConnectionManagerが受け持つ。
                 "--window-title=Rokid Vision HUD Source",
                 "--window-borderless",
                 "--window-width=\(Int(deviceSize.width))",

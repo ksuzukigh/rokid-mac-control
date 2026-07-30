@@ -31,6 +31,7 @@ xcrun swiftc \
     -framework CoreVideo \
     -framework ScreenCaptureKit \
     -o "$TEST_BINARY" \
+    "$ROOT/Sources/KeyboardNavigation.swift" \
     "$ROOT/Sources/VisionCompositor.swift" \
     "$ROOT/Tests/VisionCompositorSelfTest.swift"
 
@@ -54,6 +55,7 @@ xcrun swiftc \
     -target "$HOST_ARCH-apple-macos12.3" \
     -o "$NAVIGATION_TEST_BINARY" \
     "$ROOT/Sources/KeyboardNavigation.swift" \
+    "$ROOT/Sources/KeyboardCommandRouter.swift" \
     "$ROOT/Tests/KeyboardNavigationSelfTest.swift"
 
 "$NAVIGATION_TEST_BINARY"

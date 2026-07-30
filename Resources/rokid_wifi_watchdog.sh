@@ -4,11 +4,32 @@ HEARTBEAT_FILE="/data/local/tmp/rokid_mac_control_heartbeat"
 PID_FILE="/data/local/tmp/rokid_mac_wifi_watchdog.pid"
 LOG_FILE="/data/local/tmp/rokid_mac_wifi_watchdog.log"
 MAX_HEARTBEAT_AGE="${1:-20}"
-KEEP_AWAKE_INTERVAL=10
-last_keep_awake_epoch=0
+# Mac側が変更する前の「画面が消えるまでの時間」。空なら変更していない。
+ORIGINAL_SCREEN_OFF_TIMEOUT="${2:-}"
+
+# 画面休止防止のための定期的なキー送信はここでは行わない。
+# 10秒ごとのKEYCODE_WAKEUPがBluetooth音声処理を起こし、
+# 「ほわん」という音の原因になっていたため撤去した。
+# 画面の休止防止は、Mac側がscreen_off_timeoutを一時的に伸ばすことで行う。
 
 cleanup() {
-    rm -f "$PID_FILE"
+    # Mac側が強制終了して復元できなかった場合に備え、端末側でも元へ戻す。
+    # Mac側の正常終了時も呼ばれるが、同じ値を書くだけなので害はない。
+    case "$ORIGINAL_SCREEN_OFF_TIMEOUT" in
+        ''|*[!0-9]*) ;;
+        *)
+            settings put system screen_off_timeout \
+                "$ORIGINAL_SCREEN_OFF_TIMEOUT" >/dev/null 2>&1
+            printf '%s screen_off_timeout restored to %s\n' \
+                "$(date '+%H:%M:%S')" "$ORIGINAL_SCREEN_OFF_TIMEOUT" \
+                >> "$LOG_FILE"
+            ;;
+    esac
+    # 自分が書いたPIDファイルのときだけ消す。次の監視スクリプトが
+    # すでに起動している場合に、そちらの記録を消してしまわないため。
+    if [ "$(cat "$PID_FILE" 2>/dev/null)" = "$$" ]; then
+        rm -f "$PID_FILE"
+    fi
 }
 trap cleanup EXIT
 trap 'exit 0' HUP INT TERM
@@ -35,16 +56,6 @@ while true; do
     if [ "$heartbeat_age" -gt "$MAX_HEARTBEAT_AGE" ]; then
         printf '%s heartbeat expired; watchdog stopped\n' "$(date '+%H:%M:%S')" >> "$LOG_FILE"
         exit 0
-    fi
-
-    # Mac操作中は画面消灯による本体スリープとWi-Fi瞬断を防ぐ。
-    # KEYCODE_UNKNOWNはユーザーの選択や画面上の項目を変更せず、
-    # 無操作タイマーだけを更新する。設定値は変更しない。
-    keep_awake_age=$((now_epoch - last_keep_awake_epoch))
-    if [ "$keep_awake_age" -ge "$KEEP_AWAKE_INTERVAL" ]; then
-        input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
-        input keyevent KEYCODE_UNKNOWN >/dev/null 2>&1
-        last_keep_awake_epoch="$now_epoch"
     fi
 
     wifi_state="$(cmd wifi status 2>/dev/null | sed -n '1p')"

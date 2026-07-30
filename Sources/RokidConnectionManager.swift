@@ -36,6 +36,9 @@ final class RokidConnectionManager {
     private let remoteHeartbeat = "/data/local/tmp/rokid_mac_control_heartbeat"
     private let remoteWatchdogPID = "/data/local/tmp/rokid_mac_wifi_watchdog.pid"
 
+    /// 画面消灯までの時間を変更していた版が残した控え。見つけたら元へ戻す。
+    private let screenTimeoutBackupURL: URL
+
     private(set) var serial = ""
 
     init(
@@ -59,6 +62,9 @@ final class RokidConnectionManager {
             withIntermediateDirectories: true
         )
         addressURL = appSupport.appendingPathComponent("wifi-address.txt")
+        screenTimeoutBackupURL = appSupport.appendingPathComponent(
+            "screen-off-timeout.txt"
+        )
     }
 
     func prepareADBServer() {
@@ -75,6 +81,18 @@ final class RokidConnectionManager {
         // require changing the glasses' Wi-Fi state.
         if let usbSerial = findUSBDevice() {
             onProgress("Rokidに接続しています…")
+            // ケーブルがつながっている今のうちに、暗号化された無線接続を用意する。
+            // ここを飛ばすと、USBで復旧したあとずっとUSBのままになってしまう。
+            prepareSecureWirelessDebugging(usbSerial)
+            for _ in 0..<8 {
+                try checkCancellation(isCancelled)
+                Thread.sleep(forTimeInterval: 1)
+                if let discovered = connectToDiscoveredRokid(
+                    onProgress: onProgress
+                ) {
+                    return discovered
+                }
+            }
             return useUSB(usbSerial)
         }
 
@@ -124,6 +142,17 @@ final class RokidConnectionManager {
         var oldSerial = currentSerial()
         if !oldSerial.isEmpty && oldSerial.contains(":") {
             _ = adb(["disconnect", oldSerial], timeout: 3)
+        }
+        // 暗号化されない接続先は再利用しない。
+        // 候補から外すだけでなく記録も消す。残しておくと、再接続に失敗した
+        // あとの終了処理や生存信号が、この暗号化されない接続を使ってしまう。
+        if isUnencryptedAddress(oldSerial) {
+            logger.log("暗号化されない直前の接続先を破棄 \(oldSerial)")
+            stateLock.lock()
+            serial = ""
+            stateLock.unlock()
+            try? FileManager.default.removeItem(at: addressURL)
+            oldSerial = ""
         }
 
         for _ in 0..<20 {
@@ -193,7 +222,15 @@ final class RokidConnectionManager {
             "-s", current, "shell", "cat", remoteWatchdogPID,
         ], timeout: 3).output.trimmingCharacters(in: .whitespacesAndNewlines)
         if Int(oldPID) != nil {
-            _ = adb(["-s", current, "shell", "kill", oldPID], timeout: 3)
+            // 前の監視スクリプトは終了時に画面消灯の設定を元へ戻す。
+            // 完全に終わるのを待たずに次の準備を始めると、これから設定する値を
+            // 後から戻されてしまうため、終了を見届けてから先へ進む。
+            _ = adb([
+                "-s", current, "shell",
+                "kill \(oldPID); n=0;"
+                    + " while kill -0 \(oldPID) 2>/dev/null && [ $n -lt 5 ];"
+                    + " do sleep 1; n=$((n+1)); done",
+            ], timeout: 10)
         }
 
         _ = adb([
@@ -205,7 +242,14 @@ final class RokidConnectionManager {
             throw RokidConnectionError.watchdogFailed
         }
 
-        let launch = "setsid sh '\(remoteWatchdog)' 20 </dev/null >/dev/null 2>&1 &"
+        // 前回が異常終了だった場合に備え、控えが残っていれば元へ戻す。
+        restoreScreenTimeoutFromBackup(current)
+
+        // 画面消灯までの時間は、現在は変更していない。
+        // RV101ではこの設定がHUDの表示を左右せず、変更しなくても
+        // Mac操作が続けられることを実機で確認したため。
+        // 第2引数は「監視スクリプトが終了時に戻すべき値」で、空なら何もしない。
+        let launch = "setsid sh '\(remoteWatchdog)' 20 '' </dev/null >/dev/null 2>&1 &"
         guard adb([
             "-s", current, "shell", launch,
         ], timeout: 5).succeeded else {
@@ -259,6 +303,7 @@ final class RokidConnectionManager {
             "-s", current, "shell", "rm", "-f",
             remoteHeartbeat, remoteWatchdogPID,
         ], timeout: 2)
+        restoreScreenTimeoutFromBackup(current)
         logger.log("Mac操作モード終了")
     }
 
@@ -294,6 +339,47 @@ final class RokidConnectionManager {
         return usbSerial
     }
 
+    /// USBがつながっている間に、暗号化された無線接続の下準備をする。
+    ///
+    /// 旧版は`adb tcpip 5555`で暗号化なしのTCP待ち受けを作っていた。これは
+    /// `service.adb.tcp.port`として端末に残り、再起動しても待ち受けが続くため、
+    /// 同じWi-Fi内の別の機器から接続できる状態になる。見つけたら閉じる。
+    private func prepareSecureWirelessDebugging(_ usbSerial: String) {
+        let tcpPort = adb([
+            "-s", usbSerial, "shell", "getprop", "service.adb.tcp.port",
+        ], timeout: 3).output.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if tcpPort == "5555" {
+            // 旧版が残した暗号化なしの待ち受けを閉じる。
+            // adbdを再起動するので、必要なときだけ実行する。
+            logger.log("暗号化されない待ち受け（5555番）を閉じます")
+            _ = adb(["-s", usbSerial, "usb"], timeout: 8)
+            // adbdの再起動でUSB接続が一度切れる。先に眠ってから待たないと、
+            // 切れる前の接続を見て「もう繋がっている」と誤判定してしまう。
+            Thread.sleep(forTimeInterval: 2)
+            _ = adb(["-s", usbSerial, "wait-for-device"], timeout: 20)
+        }
+
+        let enabled = adb([
+            "-s", usbSerial, "shell", "settings", "put", "global",
+            "adb_wifi_enabled", "1",
+        ], timeout: 5)
+        logger.log(
+            enabled.succeeded
+                ? "ワイヤレスデバッグ（暗号化）を有効化"
+                : "ワイヤレスデバッグの有効化に失敗 output=\(enabled.output)"
+        )
+    }
+
+    /// 暗号化されない固定5555番の接続先かどうか。
+    ///
+    /// Android標準のワイヤレスデバッグ（TLS）は起動のたびに違う番号を使う。
+    /// 5555番は`adb tcpip 5555`が作る暗号化なしの待ち受けなので、
+    /// 過去に保存されていても再利用しない。
+    private func isUnencryptedAddress(_ address: String) -> Bool {
+        address.hasSuffix(":5555")
+    }
+
     private func readSavedAddress() -> String? {
         guard
             let data = try? Data(contentsOf: addressURL),
@@ -301,6 +387,12 @@ final class RokidConnectionManager {
                 .trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
         else {
+            return nil
+        }
+        guard !isUnencryptedAddress(value) else {
+            logger.log("暗号化されない保存済み接続先を破棄 \(value)")
+            _ = adb(["disconnect", value], timeout: 3)
+            try? FileManager.default.removeItem(at: addressURL)
             return nil
         }
         return value
@@ -360,7 +452,7 @@ final class RokidConnectionManager {
             addresses = discoverWithBonjour()
         }
         return addresses.reduce(into: []) { unique, address in
-            if !unique.contains(address) {
+            if !unique.contains(address), !isUnencryptedAddress(address) {
                 unique.append(address)
             }
         }
@@ -492,22 +584,30 @@ final class RokidConnectionManager {
             ], timeout: 3)
         }
 
-        let address = "\(ipAddress):5555"
-        _ = adb(["disconnect", address], timeout: 3)
-        _ = adb(["-s", usbSerial, "tcpip", "5555"], timeout: 8)
-        Thread.sleep(forTimeInterval: 2)
-        for _ in 0..<10 {
+        // `adb tcpip 5555`は使わない。
+        //
+        // あれはadbdを暗号化なしのTCP待ち受けへ切り替えるもので、一度実行すると
+        // Rokidが同じWi-Fi内の誰からでも接続できる状態になり、`service.adb.tcp.port`
+        // が残るため再起動後も続く。さらに保存した`:5555`が次回以降の起動で
+        // 最優先に使われ、暗号化なしの接続に固定されてしまう。
+        //
+        // 代わりにAndroid標準のワイヤレスデバッグ（TLS）を有効にし、
+        // 初回USB認証で登録済みのMacの鍵で繋ぐ。
+        logger.log("暗号化された無線接続を用意します ip=\(ipAddress)")
+        prepareSecureWirelessDebugging(usbSerial)
+
+        // 待ち受けの準備とmDNSの告知には少し時間がかかる。
+        for _ in 0..<15 {
             try checkCancellation(isCancelled)
-            if connect(address) {
-                if isRokidDevice(address) {
-                    return use(address)
-                }
-                rejectWiFiDevice(address)
-                throw RokidConnectionError.noDevice
-            }
             Thread.sleep(forTimeInterval: 1)
+            if let discovered = connectToDiscoveredRokid() {
+                return discovered
+            }
         }
-        throw RokidConnectionError.noDevice
+
+        // TLSで繋げないときは、暗号化なしへ落とさずUSB接続のまま続ける。
+        logger.log("暗号化接続を用意できないためUSB接続を継続します")
+        return useUSB(usbSerial)
     }
 
     private func checkCancellation(
@@ -562,6 +662,41 @@ final class RokidConnectionManager {
             return nil
         }
         return String(text[range])
+    }
+
+    // MARK: - 画面消灯の設定
+
+    // このアプリはRokidの`screen_off_timeout`を変更しない。
+    //
+    // 当初は、Mac操作中にRokidの画面が消えないよう24時間へ伸ばしていた。
+    // しかしRV101で実測したところ、Androidとしてはスリープ状態になっても
+    // HUDの表示は続いており、この設定はHUDの点灯・消灯を決めていなかった。
+    // 利用者もMac操作中に画面が落ちて困った経験がないため、端末の設定を
+    // 書き換えない方針に戻した。長時間の放置で接続が切れる事例が出た場合は、
+    // 控えと復元のうえで再導入する（履歴に実装が残っている）。
+
+    /// 設定を変更していた版が残した控えがあれば、元の値へ戻す。
+    private func restoreScreenTimeoutFromBackup(_ serial: String) {
+        guard
+            let original = try? String(
+                contentsOf: screenTimeoutBackupURL,
+                encoding: .utf8
+            ).trimmingCharacters(in: .whitespacesAndNewlines),
+            Int(original) != nil
+        else {
+            return
+        }
+        let result = adb([
+            "-s", serial, "shell", "settings", "put", "system",
+            "screen_off_timeout", original,
+        ], timeout: 5)
+        // 書き戻せなかったときは控えを残す。次回起動でもう一度やり直せる。
+        guard result.succeeded else {
+            logger.log("画面消灯までの時間を復元できませんでした（控えは残します）")
+            return
+        }
+        try? FileManager.default.removeItem(at: screenTimeoutBackupURL)
+        logger.log("画面消灯までの時間を復元 \(original)")
     }
 
     private func stopHeartbeat() {
