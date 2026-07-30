@@ -39,6 +39,13 @@ final class RokidConnectionManager {
     /// 画面消灯までの時間を変更していた版が残した控え。見つけたら元へ戻す。
     private let screenTimeoutBackupURL: URL
 
+    // 暗号化の判定結果を、ひとつの接続試行のあいだだけ覚えておく。
+    // 判定には端末への問い合わせが3回かかるため、繰り返しのたびに
+    // 同じ接続先を調べ直すと待ち時間が積み上がる。
+    private let encryptionCacheLock = NSLock()
+    private var encryptionVerdictCache:
+        [String: ConnectionEncryption.Verdict] = [:]
+
     private(set) var serial = ""
 
     init(
@@ -76,6 +83,7 @@ final class RokidConnectionManager {
         isCancelled: () -> Bool = { false }
     ) throws -> String {
         try checkCancellation(isCancelled)
+        forgetEncryptionVerdicts()
         onProgress("Rokidを探しています…")
         // A connected development cable is the most stable path and does not
         // require changing the glasses' Wi-Fi state.
@@ -146,14 +154,15 @@ final class RokidConnectionManager {
     func reconnect(
         isCancelled: () -> Bool = { false }
     ) -> String? {
+        forgetEncryptionVerdicts()
         var oldSerial = currentSerial()
         if !oldSerial.isEmpty && oldSerial.contains(":") {
             _ = adb(["disconnect", oldSerial], timeout: 3)
         }
-        // 暗号化されない接続先は再利用しない。
-        // 候補から外すだけでなく記録も消す。残しておくと、再接続に失敗した
-        // あとの終了処理や生存信号が、この暗号化されない接続を使ってしまう。
-        if isUnencryptedAddress(oldSerial) {
+        // 念のための備え。現在の経路では、暗号化されない接続先が`serial`へ
+        // 入ることはない（採用前に必ず暗号化を確かめるため）。それでも、
+        // 古い版が残した記録などで紛れ込んだ場合に再利用しないようにする。
+        if isDefaultPlaintextAddress(oldSerial) {
             logger.log("暗号化されない直前の接続先を破棄 \(oldSerial)")
             stateLock.lock()
             serial = ""
@@ -380,12 +389,12 @@ final class RokidConnectionManager {
         )
     }
 
-    /// 暗号化されない固定5555番の接続先かどうか。
+    /// `adb tcpip 5555`が作る既定の暗号化なし接続先かどうか。
     ///
-    /// Android標準のワイヤレスデバッグ（TLS）は起動のたびに違う番号を使う。
-    /// 5555番は`adb tcpip 5555`が作る暗号化なしの待ち受けなので、
-    /// 過去に保存されていても再利用しない。
-    private func isUnencryptedAddress(_ address: String) -> Bool {
+    /// これは繋ぐ前に使える簡易のふるい分けにすぎない。`adb tcpip`は5555以外の
+    /// ポートも使えるため、これだけでは暗号化を保証できない。実際の判定は
+    /// 接続後に`encryptionRejectionReason(_:)`が端末の状態を読んで行う。
+    private func isDefaultPlaintextAddress(_ address: String) -> Bool {
         address.hasSuffix(":5555")
     }
 
@@ -398,7 +407,7 @@ final class RokidConnectionManager {
         else {
             return nil
         }
-        guard !isUnencryptedAddress(value) else {
+        guard !isDefaultPlaintextAddress(value) else {
             logger.log("暗号化されない保存済み接続先を破棄 \(value)")
             _ = adb(["disconnect", value], timeout: 3)
             try? FileManager.default.removeItem(at: addressURL)
@@ -462,7 +471,7 @@ final class RokidConnectionManager {
             guard
                 let address,
                 address.contains(":"),
-                !isUnencryptedAddress(address),
+                !isDefaultPlaintextAddress(address),
                 !ordered.contains(address)
             else {
                 return
@@ -508,23 +517,103 @@ final class RokidConnectionManager {
         for candidate in secureWiFiCandidates(recent: recent) {
             onProgress("Rokidに接続しています…")
             guard connect(candidate.address) else { continue }
-            if isRokidDevice(candidate.address) {
-                return use(candidate.address)
-            }
-            // もともと繋がっていた接続は、Rokidでなくても切らない。
-            // 利用者が別の端末を自分で繋いでいることがあるため。
-            guard !candidate.wasAlreadyConnected else {
-                logger.log(
-                    "Rokid以外の接続済み端末はそのままにします serial=\(candidate.address)"
-                )
+
+            guard isRokidDevice(candidate.address) else {
+                reject(candidate, reason: "Rokid以外の接続先です")
                 continue
             }
-            rejectWiFiDevice(
-                candidate.address,
-                removeSavedAddress: candidate.isSaved
-            )
+            // 採用して保存する前に、暗号化されていることを端末の状態から確かめる。
+            // ポート番号だけでは判定できないため、ここまで繋いでから確認する。
+            guard let reason = encryptionRejectionReason(candidate.address)
+            else {
+                return use(candidate.address)
+            }
+            reject(candidate, reason: reason)
         }
         return nil
+    }
+
+    /// 採用しない候補の後始末。
+    private func reject(_ candidate: WiFiCandidate, reason: String) {
+        logger.log("接続先を拒否 serial=\(candidate.address) 理由=\(reason)")
+        if candidate.isSaved {
+            try? FileManager.default.removeItem(at: addressURL)
+            logger.log("保存済みWi-Fi接続先を破棄")
+        }
+        // もともと繋がっていた接続は切らない。
+        // 利用者が別の端末を自分で繋いでいることがあるため。
+        guard !candidate.wasAlreadyConnected else {
+            logger.log(
+                "もともと繋がっていた接続なので切断はしません serial=\(candidate.address)"
+            )
+            return
+        }
+        _ = adb(["disconnect", candidate.address], timeout: 3)
+    }
+
+    /// 接続先が暗号化されていない場合に、その理由を返す。暗号化されていればnil。
+    ///
+    /// 端末の状態を読むにはいったん接続する必要があるが、ここで実行するのは
+    /// `getprop` と `settings get` の読み取りだけで、端末には何も書き込まない。
+    /// 暗号化されていないと分かった接続はこの直後に切断する。ただし利用者が
+    /// もともと繋いでいた接続は切らない。
+    ///
+    /// 判定結果を覚えておく。ひとつの接続試行のあいだに同じ接続先を
+    /// 何度も問い合わせると、待ち時間が積み上がるため。
+    private func encryptionRejectionReason(_ address: String) -> String? {
+        encryptionCacheLock.lock()
+        let cached = encryptionVerdictCache[address]
+        encryptionCacheLock.unlock()
+        if let cached {
+            return ConnectionEncryption.rejectionReason(for: cached)
+        }
+
+        // 標準出力と標準エラーは同じ経路で受け取るため、警告が混ざりうる。
+        // 行に分けてから比べ、待ち受けポートを取りこぼさないようにする。
+        let plaintextPorts = [
+            "service.adb.tcp.port",
+            "persist.adb.tcp.port",
+        ].flatMap { property in
+            adb([
+                "-s", address, "shell", "getprop", property,
+            ], timeout: 3)
+                .output
+                .split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        }
+        let wifiDebugging = adb([
+            "-s", address, "shell", "settings", "get", "global",
+            "adb_wifi_enabled",
+        ], timeout: 3)
+            .output
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        let verdict = ConnectionEncryption.verdict(
+            address: address,
+            plaintextPorts: plaintextPorts,
+            wirelessDebuggingEnabled: wifiDebugging.contains("1")
+        )
+        // 覚えておくのは、ひとつの接続試行のあいだに変わらない判定だけにする。
+        // ワイヤレスデバッグの有効・無効は端末の準備しだいで後から変わる。
+        // これを覚えてしまうと、繰り返し待ち直す仕組みが効かなくなる。
+        switch verdict {
+        case .plaintextListener, .notNetworkAddress:
+            encryptionCacheLock.lock()
+            encryptionVerdictCache[address] = verdict
+            encryptionCacheLock.unlock()
+        case .encrypted, .wirelessDebuggingDisabled:
+            break
+        }
+        return ConnectionEncryption.rejectionReason(for: verdict)
+    }
+
+    /// 接続試行を始めるときに、覚えていた判定結果を捨てる。
+    /// 端末の状態は起動のたびに変わりうるため、持ち越さない。
+    private func forgetEncryptionVerdicts() {
+        encryptionCacheLock.lock()
+        encryptionVerdictCache.removeAll()
+        encryptionCacheLock.unlock()
     }
 
     private func discoverSecureWiFi() -> [String] {
@@ -541,7 +630,7 @@ final class RokidConnectionManager {
             addresses = discoverWithBonjour()
         }
         return addresses.reduce(into: []) { unique, address in
-            if !unique.contains(address), !isUnencryptedAddress(address) {
+            if !unique.contains(address), !isDefaultPlaintextAddress(address) {
                 unique.append(address)
             }
         }
@@ -717,18 +806,6 @@ final class RokidConnectionManager {
             $0.contains("rokid")
                 || $0.contains("rv101")
                 || $0.contains("rg-glasses")
-        }
-    }
-
-    private func rejectWiFiDevice(
-        _ address: String,
-        removeSavedAddress: Bool
-    ) {
-        logger.log("Rokid以外の接続先を拒否 serial=\(address)")
-        _ = adb(["disconnect", address], timeout: 3)
-        if removeSavedAddress {
-            try? FileManager.default.removeItem(at: addressURL)
-            logger.log("保存済みWi-Fi接続先を破棄")
         }
     }
 
