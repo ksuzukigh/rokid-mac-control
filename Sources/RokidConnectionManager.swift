@@ -7,11 +7,14 @@ enum RokidConnectionError: LocalizedError {
     case watchdogFailed
     case cancelled
     case plaintextListenerRemains
+    case safetyUnverified
 
     var errorDescription: String? {
         switch self {
         case .missingResource(let name):
             return "アプリ内の必要なファイルが見つかりません: \(name)"
+        case .safetyUnverified:
+            return "Rokidの安全確認ができなかったため、起動を中止しました。暗号化されていない接続の入口が残っている可能性があります。Rokidを再起動し、開発用5ピンケーブルでMacとつないでから、もう一度起動してください。"
         case .plaintextListenerRemains:
             return "Rokidに暗号化されていない接続の入口が残っているため、安全のため接続しませんでした。開発用5ピンケーブルでMacとつなぎ、もう一度起動してください。入口を閉じてから無線接続へ切り替えます。"
         case .noDevice:
@@ -148,13 +151,10 @@ final class RokidConnectionManager {
         onProgress: (String) -> Void = { _ in },
         isCancelled: () -> Bool = { false }
     ) throws -> String {
-        guard prepareSecureWirelessDebugging(usbSerial) else {
-            // USB接続そのものは安全なので操作は続けられる。ただし端末側に
-            // 暗号化されていない入口が残っている可能性があるため、記録に残す。
-            logger.log(
-                "【注意】安全な無線接続を用意できないためUSB接続を継続します。"
-                    + "端末に暗号化されていない入口が残っている可能性があります"
-            )
+        // 安全を確認できない場合はここで投げ、起動を続けない。
+        // 入口は閉じられたが無線を有効にできなかった場合だけUSBを継続する。
+        guard try prepareSecureWirelessDebugging(usbSerial) else {
+            logger.log("無線を有効にできないためUSB接続を継続します")
             return useUSB(usbSerial)
         }
         for _ in 0..<attempts {
@@ -171,9 +171,11 @@ final class RokidConnectionManager {
         return useUSB(usbSerial)
     }
 
+    /// 見つからなかった場合は`nil`を返す。安全を確認できなかった場合は投げる。
+    /// 安全でない可能性を黙って飲み込まないよう、戻り値と分けてある。
     func reconnect(
         isCancelled: () -> Bool = { false }
-    ) -> String? {
+    ) throws -> String? {
         forgetEncryptionVerdicts()
         var oldSerial = currentSerial()
         if !oldSerial.isEmpty && oldSerial.contains(":") {
@@ -201,7 +203,8 @@ final class RokidConnectionManager {
             if let usbSerial = findUSBDevice() {
                 // USBへ退避した場合も、暗号化された無線接続を用意し直して戻る。
                 // ここでUSBを返して終えると、以後ずっとUSBのままになる。
-                return try? migrateToSecureWiFi(
+                // 安全を確認できなかった場合は、投げてそのまま呼び出し元へ伝える。
+                return try migrateToSecureWiFi(
                     usbSerial: usbSerial,
                     recent: recentWiFi,
                     isCancelled: isCancelled
@@ -382,12 +385,17 @@ final class RokidConnectionManager {
     /// 旧版は`adb tcpip 5555`で暗号化なしのTCP待ち受けを作っていた。これは
     /// `service.adb.tcp.port`として端末に残り、再起動しても待ち受けが続くため、
     /// 同じWi-Fi内の別の機器から接続できる状態になる。見つけたら閉じる。
-    /// 用意できたときだけ`true`。閉じられない入口が残る場合は`false`を返し、
-    /// 無線へは移行しない（安全側に倒す）。
-    private func prepareSecureWirelessDebugging(_ usbSerial: String) -> Bool {
+    /// 暗号化されていない入口を閉じられたかを確認できない場合は投げる。
+    /// この状態で起動を続けると、安全でない端末をそのまま使うことになる。
+    ///
+    /// 入口は閉じられたが無線を有効にできなかった場合は`false`を返す。
+    /// こちらは安全上の問題ではないため、USB接続の継続を許す。
+    private func prepareSecureWirelessDebugging(
+        _ usbSerial: String
+    ) throws -> Bool {
         guard closePlaintextListeners(usbSerial) else {
-            logger.log("暗号化されていない入口を閉じられないため、無線へは移行しません")
-            return false
+            logger.log("暗号化されていない入口の安全確認ができないため起動を中止します")
+            throw RokidConnectionError.safetyUnverified
         }
 
         let enabled = adb([

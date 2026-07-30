@@ -423,11 +423,26 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             self.workQueue.async { [weak self] in
                 guard let self, !self.isTerminating else { return }
                 if !connection.isCurrentConnectionAlive() {
-                    guard connection.reconnect(
-                        isCancelled: { [weak self] in
-                            self?.isTerminating ?? true
+                    let recovered: String?
+                    do {
+                        recovered = try connection.reconnect(
+                            isCancelled: { [weak self] in
+                                self?.isTerminating ?? true
+                            }
+                        )
+                    } catch {
+                        // 安全を確認できなかった場合。黙って続けない。
+                        if case RokidConnectionError.cancelled = error {
+                            return
                         }
-                    ) != nil else {
+                        guard !self.isTerminating else { return }
+                        self.failFromWorker(
+                            title: "安全確認ができないため中止しました",
+                            message: error.localizedDescription
+                        )
+                        return
+                    }
+                    guard recovered != nil else {
                         guard !self.isTerminating else { return }
                         self.failFromWorker(
                             title: "Wi-Fi接続を復旧できませんでした",
@@ -627,11 +642,26 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     ) {
         guard !isTerminating, let connection else { return }
         logger?.log("Wi-Fi再接続開始")
-        guard connection.reconnect(
-            isCancelled: { [weak self] in
-                self?.isTerminating ?? true
+        let recovered: String?
+        do {
+            recovered = try connection.reconnect(
+                isCancelled: { [weak self] in
+                    self?.isTerminating ?? true
+                }
+            )
+        } catch {
+            // 安全を確認できなかった場合。黙って続けない。
+            if case RokidConnectionError.cancelled = error {
+                return
             }
-        ) != nil else {
+            guard !isTerminating else { return }
+            failFromWorker(
+                title: "安全確認ができないため中止しました",
+                message: error.localizedDescription
+            )
+            return
+        }
+        guard recovered != nil else {
             guard !isTerminating else { return }
             failFromWorker(
                 title: "Wi-Fi接続を復旧できませんでした",
