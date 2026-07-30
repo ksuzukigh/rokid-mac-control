@@ -7,6 +7,7 @@ BUILD="$ROOT/build"
 TEST_BINARY="$BUILD/VisionCompositorSelfTest"
 RUNNER_TEST_BINARY="$BUILD/ProcessRunnerSelfTest"
 NAVIGATION_TEST_BINARY="$BUILD/KeyboardNavigationSelfTest"
+ENCRYPTION_TEST_BINARY="$BUILD/ConnectionEncryptionSelfTest"
 OUTPUT="$BUILD/vision-compositor-self-test.png"
 
 mkdir -p "$BUILD"
@@ -31,6 +32,7 @@ xcrun swiftc \
     -framework CoreVideo \
     -framework ScreenCaptureKit \
     -o "$TEST_BINARY" \
+    "$ROOT/Sources/KeyboardNavigation.swift" \
     "$ROOT/Sources/VisionCompositor.swift" \
     "$ROOT/Tests/VisionCompositorSelfTest.swift"
 
@@ -54,6 +56,18 @@ xcrun swiftc \
     -target "$HOST_ARCH-apple-macos12.3" \
     -o "$NAVIGATION_TEST_BINARY" \
     "$ROOT/Sources/KeyboardNavigation.swift" \
+    "$ROOT/Sources/KeyboardCommandRouter.swift" \
     "$ROOT/Tests/KeyboardNavigationSelfTest.swift"
 
 "$NAVIGATION_TEST_BINARY"
+
+xcrun swiftc \
+    -O \
+    -swift-version 5 \
+    -parse-as-library \
+    -target "$HOST_ARCH-apple-macos12.3" \
+    -o "$ENCRYPTION_TEST_BINARY" \
+    "$ROOT/Sources/ConnectionEncryption.swift" \
+    "$ROOT/Tests/ConnectionEncryptionSelfTest.swift"
+
+"$ENCRYPTION_TEST_BINARY"

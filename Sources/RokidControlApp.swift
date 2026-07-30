@@ -8,20 +8,44 @@ private final class ActivationWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
-private final class NavigationHighlightView: NSView {
+/// scrcpyウインドウの上へ重ねる操作案内。クリックは受け取らない。
+private final class NavigationGuideView: NSView {
+    static let height: CGFloat = 34
+
+    var text = NavigationGuide.standard {
+        didSet {
+            guard text != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
     override var isOpaque: Bool { false }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        NSColor.black.withAlphaComponent(0.65).setStroke()
-        let outer = NSBezierPath(ovalIn: bounds.insetBy(dx: 3, dy: 3))
-        outer.lineWidth = 7
-        outer.stroke()
+        let rounded = NSBezierPath(
+            roundedRect: bounds,
+            xRadius: 8,
+            yRadius: 8
+        )
+        NSColor.black.withAlphaComponent(0.72).setFill()
+        rounded.fill()
 
-        NSColor.systemCyan.setStroke()
-        let inner = NSBezierPath(ovalIn: bounds.insetBy(dx: 5, dy: 5))
-        inner.lineWidth = 3
-        inner.stroke()
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+            .foregroundColor: NSColor.white,
+            .paragraphStyle: paragraph,
+        ]
+        let size = (text as NSString).size(withAttributes: attributes)
+        let textRect = NSRect(
+            x: bounds.minX,
+            y: bounds.midY - size.height / 2,
+            width: bounds.width,
+            height: size.height
+        )
+        (text as NSString).draw(in: textRect, withAttributes: attributes)
     }
 }
 
@@ -46,8 +70,13 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     private var connectingStatusLabel: NSTextField?
     private var terminationWindow: NSWindow?
     private var activationWindow: NSWindow?
-    private var navigationHighlightWindow: NSPanel?
-    private var currentNavigationItem: LowerNavigationItem?
+    private var navigationGuideWindow: NSPanel?
+    private var navigationGuideView: NavigationGuideView?
+    private var navigationGuideSettleCheck: DispatchWorkItem?
+    private var scrcpyWindowObserver: AXObserver?
+    private var scrcpyWindowElement: AXUIElement?
+    private var frontmostAppObserver: NSObjectProtocol?
+    private var isSelectingApp = false
     private let stateLock = NSLock()
     private var terminationStarted = false
     private var terminationFinished = false
@@ -135,8 +164,8 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
                         keyboard.onActivate = { [weak self] in
                             self?.activateAfterScrcpyClick()
                         }
-                        keyboard.onNavigationSelection = { [weak self] item in
-                            self?.updateNavigationSelection(item)
+                        keyboard.onAppSelectionChanged = { [weak self] active in
+                            self?.updateAppSelection(active)
                         }
                         keyboard.onQuit = {
                             NSApp.terminate(nil)
@@ -205,9 +234,16 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
 
         stopLocalResources()
         showTerminationWindowIfNeeded()
+        // 実行中のADBを止める。接続処理と終了処理は同じ直列キューを使うため、
+        // 止めないと長いADB待機が終わるまで終了処理が始まらない。
+        runner?.cancel()
         let connection = self.connection
         let logger = self.logger
+        let runner = self.runner
         workQueue.async { [weak self] in
+            // 直列キューなので、ここに来た時点で接続処理は終わっている。
+            // 後片付けのADBを実行できるようキャンセル状態を解除する。
+            runner?.resumeAfterCancellation()
             connection?.stopMacMode()
             // terminateLater中はメインのDispatchQueueが進まない場合がある。
             // RunLoopへ直接積み、終了の返答を必ずAppKitへ返す。
@@ -274,6 +310,8 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             "--serial", serial,
             "--no-audio",
             "--keyboard=disabled",
+            // 画面休止防止はscrcpyへ任せず、RokidConnectionManagerが
+            // 元の値を控えたうえで自分で設定・復元する。
             "--window-title=Rokid AI Glasses RV101（Mac操作モード）",
         ]
         configuration.environment = environment
@@ -309,6 +347,10 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
                     )
                     self.ensureActivationWindow()
                     self.closeConnectingWindow()
+                    self.attachNavigationGuide(
+                        processIdentifier:
+                            runningApplication.processIdentifier
+                    )
                     logger.log(
                         "scrcpy開始 pid=\(runningApplication.processIdentifier) serial=\(serial)"
                     )
@@ -381,11 +423,26 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             self.workQueue.async { [weak self] in
                 guard let self, !self.isTerminating else { return }
                 if !connection.isCurrentConnectionAlive() {
-                    guard connection.reconnect(
-                        isCancelled: { [weak self] in
-                            self?.isTerminating ?? true
+                    let recovered: String?
+                    do {
+                        recovered = try connection.reconnect(
+                            isCancelled: { [weak self] in
+                                self?.isTerminating ?? true
+                            }
+                        )
+                    } catch {
+                        // 安全を確認できなかった場合。黙って続けない。
+                        if case RokidConnectionError.cancelled = error {
+                            return
                         }
-                    ) != nil else {
+                        guard !self.isTerminating else { return }
+                        self.failFromWorker(
+                            title: "安全確認ができないため中止しました",
+                            message: error.localizedDescription
+                        )
+                        return
+                    }
+                    guard recovered != nil else {
                         guard !self.isTerminating else { return }
                         self.failFromWorker(
                             title: "Wi-Fi接続を復旧できませんでした",
@@ -482,6 +539,9 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         removeScrcpyTerminationObserver()
         scrcpyApplication = nil
         keyboard?.updateScrcpyProcessIdentifier(nil)
+        // 再起動したscrcpyは別ウインドウになるため、案内の追従を張り直す。
+        stopTrackingScrcpyWindow()
+        navigationGuideWindow?.orderOut(nil)
         guard !isTerminating else { return }
         workQueue.async { [weak self] in
             self?.handleScrcpyTermination(
@@ -582,11 +642,26 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
     ) {
         guard !isTerminating, let connection else { return }
         logger?.log("Wi-Fi再接続開始")
-        guard connection.reconnect(
-            isCancelled: { [weak self] in
-                self?.isTerminating ?? true
+        let recovered: String?
+        do {
+            recovered = try connection.reconnect(
+                isCancelled: { [weak self] in
+                    self?.isTerminating ?? true
+                }
+            )
+        } catch {
+            // 安全を確認できなかった場合。黙って続けない。
+            if case RokidConnectionError.cancelled = error {
+                return
             }
-        ) != nil else {
+            guard !isTerminating else { return }
+            failFromWorker(
+                title: "安全確認ができないため中止しました",
+                message: error.localizedDescription
+            )
+            return
+        }
+        guard recovered != nil else {
             guard !isTerminating else { return }
             failFromWorker(
                 title: "Wi-Fi接続を復旧できませんでした",
@@ -748,7 +823,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         removeScrcpyTerminationObserver()
         keyboard?.stop()
         keyboard?.onActivate = nil
-        keyboard?.onNavigationSelection = nil
+        keyboard?.onAppSelectionChanged = nil
         keyboard?.onQuit = nil
         keyboard = nil
         visionController?.stop()
@@ -756,9 +831,14 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         visionRecoveryInProgress = false
         activationWindow?.orderOut(nil)
         activationWindow = nil
-        navigationHighlightWindow?.orderOut(nil)
-        navigationHighlightWindow = nil
-        currentNavigationItem = nil
+        stopTrackingScrcpyWindow()
+        stopTrackingFrontmostApp()
+        navigationGuideSettleCheck?.cancel()
+        navigationGuideSettleCheck = nil
+        navigationGuideWindow?.orderOut(nil)
+        navigationGuideWindow = nil
+        navigationGuideView = nil
+        isSelectingApp = false
 
         if let application = scrcpyApplication, !application.isTerminated {
             application.terminate()
@@ -809,48 +889,153 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
             guard let self, !self.isTerminating else { return }
             self.activateRokidControl()
-            if let item = self.currentNavigationItem {
-                self.showStandardNavigationHighlight(for: item)
-            }
+            self.showNavigationGuide()
             self.logger?.log("Rokid画面クリックでアプリを前面化")
         }
     }
 
-    private func updateNavigationSelection(
-        _ item: LowerNavigationItem?
-    ) {
+    /// アプリ一覧の選択状態にあわせて案内文を切り替える。
+    /// 選択が終わっても案内は消さず、通常案内へ戻す。
+    private func updateAppSelection(_ active: Bool) {
         dispatchPrecondition(condition: .onQueue(.main))
-        currentNavigationItem = item
-        visionController?.setNavigationSelection(item)
-        guard displayMode == .standard, let item else {
-            navigationHighlightWindow?.orderOut(nil)
-            return
-        }
-        showStandardNavigationHighlight(for: item)
+        isSelectingApp = active
+        visionController?.setAppSelection(active)
+        guard displayMode == .standard else { return }
+        navigationGuideView?.text = NavigationGuide.text(isSelectingApp: active)
     }
 
-    private func showStandardNavigationHighlight(
-        for item: LowerNavigationItem
+    // MARK: - 背景なし画面の操作案内
+
+    /// scrcpyのウインドウができ次第、案内パネルを出して追従を始める。
+    ///
+    /// scrcpyの起動直後はまだウインドウが存在しないことがあるため、
+    /// 見つかるまで数秒だけ様子を見る。以降は位置を調べ続けず、
+    /// macOSのウインドウ通知で追従する。
+    private func attachNavigationGuide(
+        processIdentifier: pid_t,
+        attempt: Int = 0
     ) {
-        guard
-            let processIdentifier = scrcpyApplication?.processIdentifier,
-            let screenSize = keyboard?.currentScreenSize(),
-            let center = standardNavigationCenter(
-                processIdentifier: processIdentifier,
-                item: item,
-                screenSize: screenSize
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard displayMode == .standard, !isTerminating else { return }
+        guard scrcpyApplication?.processIdentifier == processIdentifier else {
+            return
+        }
+        let ready = scrcpyWindowBounds() != nil
+            && startTrackingScrcpyWindow(
+                processIdentifier: processIdentifier
             )
+        guard ready else {
+            guard attempt < 20 else {
+                logger?.log("scrcpyウインドウが見つからず操作案内を表示できません")
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                [weak self] in
+                self?.attachNavigationGuide(
+                    processIdentifier: processIdentifier,
+                    attempt: attempt + 1
+                )
+            }
+            return
+        }
+        startTrackingFrontmostApp()
+        showNavigationGuide()
+    }
+
+    /// ウインドウが動いている間は案内を隠し、止まってから出し直す。
+    ///
+    /// macOSのウインドウ通知は他社製アプリが相手だと間引かれて届くため、
+    /// 通知が来るたびに位置を合わせると、案内が遅れて付いてくる見た目になる。
+    /// 動いている最中は消しておき、落ち着いてから新しい位置へ出す。
+    private func handleScrcpyWindowChanged() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        navigationGuideWindow?.orderOut(nil)
+        navigationGuideSettleCheck?.cancel()
+
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            navigationGuideSettleCheck = nil
+            showNavigationGuide()
+        }
+        navigationGuideSettleCheck = item
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + 0.2,
+            execute: item
+        )
+    }
+
+    /// ほかのアプリを前面にしている間は案内を隠す。
+    /// Rokid ControlかRokid画面に戻ったら、また常時表示へ戻す。
+    private func startTrackingFrontmostApp() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard frontmostAppObserver == nil else { return }
+        frontmostAppObserver = NSWorkspace.shared.notificationCenter
+            .addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                // 通知が運んでくる値を使う。frontmostApplicationは更新が
+                // 一拍遅れることがあり、表示が一つ前の状態になるため。
+                let activated = notification.userInfo?[
+                    NSWorkspace.applicationUserInfoKey
+                ] as? NSRunningApplication
+                self?.showNavigationGuide(frontmost: activated)
+            }
+    }
+
+    private func stopTrackingFrontmostApp() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let frontmostAppObserver else { return }
+        NSWorkspace.shared.notificationCenter.removeObserver(
+            frontmostAppObserver
+        )
+        self.frontmostAppObserver = nil
+    }
+
+    /// 案内を出してよい状態か。Rokid Control自身かRokid画面が前面のときだけ出す。
+    private func shouldShowNavigationGuide(
+        frontmost frontmostApplication: NSRunningApplication?
+    ) -> Bool {
+        guard
+            let frontmost = frontmostApplication
+                ?? NSWorkspace.shared.frontmostApplication
         else {
-            navigationHighlightWindow?.orderOut(nil)
+            return false
+        }
+        if frontmost.processIdentifier
+            == ProcessInfo.processInfo.processIdentifier {
+            return true
+        }
+        return frontmost.processIdentifier
+            == scrcpyApplication?.processIdentifier
+    }
+
+    /// scrcpyウインドウの上端へ案内パネルを重ねる。
+    private func showNavigationGuide(
+        frontmost frontmostApplication: NSRunningApplication? = nil
+    ) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard displayMode == .standard, !isTerminating else { return }
+        guard
+            shouldShowNavigationGuide(frontmost: frontmostApplication),
+            let bounds = scrcpyWindowBounds()
+        else {
+            navigationGuideWindow?.orderOut(nil)
             return
         }
 
         let window: NSPanel
-        if let existing = navigationHighlightWindow {
+        if let existing = navigationGuideWindow {
             window = existing
         } else {
             window = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 44, height: 44),
+                contentRect: NSRect(
+                    x: 0,
+                    y: 0,
+                    width: 320,
+                    height: NavigationGuideView.height
+                ),
                 styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false
@@ -861,34 +1046,61 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             window.hasShadow = false
             window.isFloatingPanel = true
             window.becomesKeyOnlyIfNeeded = true
-            window.hidesOnDeactivate = true
+            window.hidesOnDeactivate = false
             window.level = .floating
+            // 案内は見るだけの表示で、クリックはscrcpyへそのまま通す。
             window.ignoresMouseEvents = true
             window.isExcludedFromWindowsMenu = true
             window.collectionBehavior = [.transient, .ignoresCycle]
-            window.contentView = NavigationHighlightView(
-                frame: NSRect(x: 0, y: 0, width: 44, height: 44)
+            let view = NavigationGuideView(
+                frame: NSRect(
+                    x: 0,
+                    y: 0,
+                    width: 320,
+                    height: NavigationGuideView.height
+                )
             )
-            navigationHighlightWindow = window
+            view.autoresizingMask = [.width, .height]
+            window.contentView = view
+            navigationGuideView = view
+            navigationGuideWindow = window
         }
-        window.setFrameOrigin(
-            NSPoint(
-                x: center.x - window.frame.width / 2,
-                y: center.y - window.frame.height / 2
-            )
+
+        navigationGuideView?.text = NavigationGuide.text(
+            isSelectingApp: isSelectingApp
+        )
+        let width = max(min(bounds.width - 24, 460), 220)
+        // kCGWindowBoundsはタイトルバーを含む。閉じるボタンを隠さないよう、
+        // タイトルバーの下から案内を置く。
+        let titleBarHeight: CGFloat = 28
+        let quartzTopCenter = CGPoint(
+            x: bounds.midX,
+            y: bounds.minY + titleBarHeight + 10
+        )
+        guard let origin = cocoaPoint(fromQuartzPoint: quartzTopCenter) else {
+            window.orderOut(nil)
+            return
+        }
+        window.setFrame(
+            NSRect(
+                x: origin.x - width / 2,
+                y: origin.y - NavigationGuideView.height,
+                width: width,
+                height: NavigationGuideView.height
+            ),
+            display: true
         )
         window.orderFrontRegardless()
     }
 
-    private func standardNavigationCenter(
-        processIdentifier: pid_t,
-        item: LowerNavigationItem,
-        screenSize: (Int, Int)
-    ) -> NSPoint? {
-        guard let windows = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements],
-            kCGNullWindowID
-        ) as? [[String: Any]] else {
+    private func scrcpyWindowBounds() -> CGRect? {
+        guard
+            let processIdentifier = scrcpyApplication?.processIdentifier,
+            let windows = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements],
+                kCGNullWindowID
+            ) as? [[String: Any]]
+        else {
             return nil
         }
         guard let window = windows.first(where: {
@@ -903,28 +1115,127 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         }),
         let boundsDictionary = window[
             kCGWindowBounds as String
-        ] as? NSDictionary,
-        let bounds = CGRect(
-            dictionaryRepresentation: boundsDictionary as CFDictionary
-        ) else {
+        ] as? NSDictionary else {
             return nil
         }
+        return CGRect(
+            dictionaryRepresentation: boundsDictionary as CFDictionary
+        )
+    }
 
-        let width = CGFloat(max(screenSize.0, 1))
-        let height = CGFloat(max(screenSize.1, 1))
-        let contentHeight = min(bounds.height, bounds.width * height / width)
-        let contentWidth = contentHeight * width / height
-        let contentLeft = bounds.midX - contentWidth / 2
-        let contentTop = bounds.maxY - contentHeight
-        let devicePoint = item.devicePoint(
-            forScreenWidth: screenSize.0,
-            height: screenSize.1
+    private static let scrcpyWindowNotifications = [
+        kAXWindowMovedNotification,
+        kAXWindowResizedNotification,
+        kAXWindowMiniaturizedNotification,
+        kAXWindowDeminiaturizedNotification,
+        kAXUIElementDestroyedNotification,
+    ]
+
+    /// scrcpyウインドウの移動・サイズ変更をmacOSの通知で受け取り、案内を追従させる。
+    /// 一定間隔で位置を調べ続けるタイマーは使わない。
+    /// 登録できたときだけ`true`を返す。
+    private func startTrackingScrcpyWindow(
+        processIdentifier: pid_t
+    ) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        stopTrackingScrcpyWindow()
+
+        var observer: AXObserver?
+        let callback: AXObserverCallback = { _, _, notification, userInfo in
+            guard let userInfo else { return }
+            let app = Unmanaged<RokidControlApp>
+                .fromOpaque(userInfo)
+                .takeUnretainedValue()
+            let name = notification as String
+            DispatchQueue.main.async {
+                if name == kAXUIElementDestroyedNotification {
+                    // scrcpyがウインドウを作り直した場合は追従を張り直す。
+                    app.reattachNavigationGuide()
+                } else {
+                    app.handleScrcpyWindowChanged()
+                }
+            }
+        }
+        guard
+            AXObserverCreate(processIdentifier, callback, &observer)
+                == .success,
+            let observer
+        else {
+            return false
+        }
+
+        let application = AXUIElementCreateApplication(processIdentifier)
+        var windowsValue: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(
+                application,
+                kAXWindowsAttribute as CFString,
+                &windowsValue
+            ) == .success,
+            let windows = windowsValue as? [AXUIElement],
+            let window = windows.first
+        else {
+            return false
+        }
+
+        let pointer = Unmanaged.passUnretained(self).toOpaque()
+        for notification in Self.scrcpyWindowNotifications {
+            let result = AXObserverAddNotification(
+                observer,
+                window,
+                notification as CFString,
+                pointer
+            )
+            if result != .success {
+                logger?.log(
+                    "scrcpyウインドウ通知を登録できません \(notification) code=\(result.rawValue)"
+                )
+            }
+        }
+        // メニュー操作や確認画面の表示中も通知を受け取れるようcommonModesへ入れる。
+        CFRunLoopAddSource(
+            CFRunLoopGetMain(),
+            AXObserverGetRunLoopSource(observer),
+            .commonModes
         )
-        let quartzPoint = CGPoint(
-            x: contentLeft + devicePoint.x / width * contentWidth,
-            y: contentTop + devicePoint.y / height * contentHeight
+        scrcpyWindowObserver = observer
+        scrcpyWindowElement = window
+        return true
+    }
+
+    /// scrcpyがウインドウを作り直したとき、案内の追従を張り直す。
+    private func reattachNavigationGuide() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        stopTrackingScrcpyWindow()
+        guard
+            !isTerminating,
+            let processIdentifier = scrcpyApplication?.processIdentifier
+        else {
+            navigationGuideWindow?.orderOut(nil)
+            return
+        }
+        attachNavigationGuide(processIdentifier: processIdentifier)
+    }
+
+    private func stopTrackingScrcpyWindow() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let observer = scrcpyWindowObserver else { return }
+        if let element = scrcpyWindowElement {
+            for notification in Self.scrcpyWindowNotifications {
+                AXObserverRemoveNotification(
+                    observer,
+                    element,
+                    notification as CFString
+                )
+            }
+        }
+        CFRunLoopRemoveSource(
+            CFRunLoopGetMain(),
+            AXObserverGetRunLoopSource(observer),
+            .commonModes
         )
-        return cocoaPoint(fromQuartzPoint: quartzPoint)
+        scrcpyWindowObserver = nil
+        scrcpyWindowElement = nil
     }
 
     private func cocoaPoint(
@@ -1020,6 +1331,9 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         stateLock.lock()
         connectionCancelled = true
         stateLock.unlock()
+        // フラグを立てるだけでは、実行中のADBが終わるまで止まらない。
+        // 実行中のプロセスへも伝え、終了処理がその後ろで詰まらないようにする。
+        runner?.cancel()
         connectingStatusLabel?.stringValue = "キャンセルしています…"
         NSApp.terminate(nil)
     }
