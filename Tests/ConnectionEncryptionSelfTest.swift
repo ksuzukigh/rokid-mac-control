@@ -4,13 +4,15 @@ import Foundation
 enum ConnectionEncryptionSelfTest {
     static func main() {
         testPortExtraction()
+        testActiveListenerPortValues()
         testDefaultPlaintextPortRejected()
         testNonDefaultPlaintextPortRejected()
         testPersistentPlaintextPortRejected()
+        testRemainingPlaintextListenerRejected()
         testEncryptedConnectionAccepted()
-        testAbsentPlaintextPortValues()
         testWirelessDebuggingRequired()
         testUSBSerialIsNotNetworkAddress()
+        testPlaintextListenerProblemClassification()
         print("Connection encryption self-test passed")
     }
 
@@ -34,7 +36,31 @@ enum ConnectionEncryptionSelfTest {
         precondition(ConnectionEncryption.port(of: "host:") == nil)
     }
 
-    // MARK: - 暗号化なしの拒否
+    // MARK: - 待ち受けの有無
+
+    /// 待ち受けなしを表す値を、待ち受けと誤解釈しない。
+    private static func testActiveListenerPortValues() {
+        for absent in ["", "  ", "null", "-1", "abc", "0", "70000"] {
+            precondition(
+                !ConnectionEncryption.isActiveListenerPort(absent),
+                "\(absent) を待ち受けとして誤解釈している"
+            )
+        }
+        for present in ["5555", "7000", "37000", "1", "65535"] {
+            precondition(
+                ConnectionEncryption.isActiveListenerPort(present),
+                "\(present) を待ち受けとして数えられていない"
+            )
+        }
+        // 順序を保ったまま重複を除く。
+        precondition(
+            ConnectionEncryption.activeListenerPorts(
+                ["5555", "null", "7000", "5555", ""]
+            ) == ["5555", "7000"]
+        )
+    }
+
+    // MARK: - 暗号化なしの接続先そのもの
 
     /// `adb tcpip 5555`が作る既定の暗号化なし接続を拒否する。
     private static func testDefaultPlaintextPortRejected() {
@@ -43,52 +69,92 @@ enum ConnectionEncryptionSelfTest {
             plaintextPorts: ["5555", ""],
             wirelessDebuggingEnabled: true
         )
-        precondition(verdict == .plaintextListener(port: "5555"))
+        precondition(verdict == .plaintextConnection(port: "5555"))
         precondition(ConnectionEncryption.rejectionReason(for: verdict) != nil)
     }
 
     /// **5555以外の暗号化なし接続も拒否する。**
     ///
     /// `adb tcpip <ポート>` は任意のポートを使えるため、ポート番号が5555で
-    /// ないことをもって暗号化されているとはみなせない。端末が申告する
-    /// 待ち受けポートと一致したら、番号が何であっても拒否する。
+    /// ないことをもって暗号化されているとはみなせない。
     private static func testNonDefaultPlaintextPortRejected() {
         for port in ["7000", "37000", "5556", "12345"] {
             let address = "192.168.11.46:\(port)"
-            let verdict = ConnectionEncryption.verdict(
-                address: address,
-                plaintextPorts: [port, ""],
-                // ワイヤレスデバッグが有効でも、繋いでいる先が
-                // 暗号化なしの待ち受けなら拒否する。
-                wirelessDebuggingEnabled: true
-            )
             precondition(
-                verdict == .plaintextListener(port: port),
-                "ポート\(port)の暗号化なし接続を拒否できていない"
-            )
-            precondition(
-                !ConnectionEncryption.isEncrypted(
+                ConnectionEncryption.verdict(
                     address: address,
                     plaintextPorts: [port, ""],
                     wirelessDebuggingEnabled: true
-                ),
-                "ポート\(port)を暗号化済みと誤判定している"
+                ) == .plaintextConnection(port: port),
+                "ポート\(port)の暗号化なし接続を拒否できていない"
             )
         }
     }
 
     /// 再起動後も残る`persist.adb.tcp.port`側の待ち受けも拒否する。
     private static func testPersistentPlaintextPortRejected() {
-        let verdict = ConnectionEncryption.verdict(
-            address: "192.168.11.46:37000",
-            plaintextPorts: ["", "37000"],
-            wirelessDebuggingEnabled: true
+        precondition(
+            ConnectionEncryption.verdict(
+                address: "192.168.11.46:37000",
+                plaintextPorts: ["", "37000"],
+                wirelessDebuggingEnabled: true
+            ) == .plaintextConnection(port: "37000")
         )
-        precondition(verdict == .plaintextListener(port: "37000"))
     }
 
-    // MARK: - 暗号化ありの採用
+    // MARK: - 別ポートに残る暗号化なしの入口
 
+    /// **TLS接続中でも、別ポートに暗号化なしの入口が残っていれば拒否する。**
+    ///
+    /// Androidでは従来の暗号化なしADBとTLSサーバーは別々の待ち受けとして動く。
+    /// MacがTLSで繋いでいても、その入口は同じWi-Fi内の誰にでも開いている。
+    /// 「自分の接続が暗号化されているか」ではなく「端末に暗号化なしの入口が
+    /// 残っていないか」で判定する。
+    private static func testRemainingPlaintextListenerRejected() {
+        // TLS接続（42031番）中に、5555番の暗号化なし待ち受けが残っている。
+        let verdict = ConnectionEncryption.verdict(
+            address: "192.168.11.46:42031",
+            plaintextPorts: ["5555", ""],
+            wirelessDebuggingEnabled: true
+        )
+        precondition(
+            verdict == .plaintextListenerRemains(ports: ["5555"]),
+            "別ポートに残る暗号化なしの入口を見逃している"
+        )
+        precondition(ConnectionEncryption.rejectionReason(for: verdict) != nil)
+        precondition(
+            !ConnectionEncryption.isEncrypted(
+                address: "192.168.11.46:42031",
+                plaintextPorts: ["5555", ""],
+                wirelessDebuggingEnabled: true
+            )
+        )
+
+        // 5555以外でも同じ。ポート番号は関係ない。
+        for port in ["7000", "37000", "5556", "12345"] {
+            precondition(
+                ConnectionEncryption.verdict(
+                    address: "192.168.11.46:42031",
+                    plaintextPorts: [port, ""],
+                    wirelessDebuggingEnabled: true
+                ) == .plaintextListenerRemains(ports: [port]),
+                "ポート\(port)に残る暗号化なしの入口を見逃している"
+            )
+        }
+
+        // 2か所に残っている場合は両方を報告する。
+        precondition(
+            ConnectionEncryption.verdict(
+                address: "192.168.11.46:42031",
+                plaintextPorts: ["5555", "7000"],
+                wirelessDebuggingEnabled: true
+            ) == .plaintextListenerRemains(ports: ["5555", "7000"])
+        )
+    }
+
+    // MARK: - 採用してよい場合
+
+    /// 暗号化なしの入口がひとつも残っていないときだけ採用する。
     private static func testEncryptedConnectionAccepted() {
         precondition(
             ConnectionEncryption.verdict(
@@ -97,22 +163,7 @@ enum ConnectionEncryptionSelfTest {
                 wirelessDebuggingEnabled: true
             ) == .encrypted
         )
-        // 暗号化なしの待ち受けが別ポートで動いていても、
-        // 繋いでいる先がそれと違うなら暗号化された接続である。
-        precondition(
-            ConnectionEncryption.verdict(
-                address: "192.168.11.46:42031",
-                plaintextPorts: ["5555", ""],
-                wirelessDebuggingEnabled: true
-            ) == .encrypted
-        )
-        precondition(
-            ConnectionEncryption.rejectionReason(for: .encrypted) == nil
-        )
-    }
-
-    /// 待ち受けなしを表す値は、待ち受けとして扱わない。
-    private static func testAbsentPlaintextPortValues() {
+        // 待ち受けなしを表す値が入っていても採用してよい。
         for absent in ["", "null", "-1", "  "] {
             precondition(
                 ConnectionEncryption.verdict(
@@ -123,6 +174,9 @@ enum ConnectionEncryptionSelfTest {
                 "\(absent) を待ち受けとして誤解釈している"
             )
         }
+        precondition(
+            ConnectionEncryption.rejectionReason(for: .encrypted) == nil
+        )
     }
 
     // MARK: - ワイヤレスデバッグ
@@ -146,6 +200,33 @@ enum ConnectionEncryptionSelfTest {
                 plaintextPorts: ["", ""],
                 wirelessDebuggingEnabled: true
             ) == .notNetworkAddress
+        )
+    }
+
+    // MARK: - 案内の切り替え
+
+    /// 暗号化なしの入口が理由の拒否だけを、USB接続での対処が要る問題として扱う。
+    private static func testPlaintextListenerProblemClassification() {
+        precondition(
+            ConnectionEncryption.isPlaintextListenerProblem(
+                .plaintextConnection(port: "5555")
+            )
+        )
+        precondition(
+            ConnectionEncryption.isPlaintextListenerProblem(
+                .plaintextListenerRemains(ports: ["5555"])
+            )
+        )
+        precondition(
+            !ConnectionEncryption.isPlaintextListenerProblem(.encrypted)
+        )
+        precondition(
+            !ConnectionEncryption.isPlaintextListenerProblem(
+                .wirelessDebuggingDisabled
+            )
+        )
+        precondition(
+            !ConnectionEncryption.isPlaintextListenerProblem(.notNetworkAddress)
         )
     }
 }

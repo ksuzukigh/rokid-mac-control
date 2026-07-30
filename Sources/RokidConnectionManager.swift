@@ -6,11 +6,14 @@ enum RokidConnectionError: LocalizedError {
     case wifiUnavailable
     case watchdogFailed
     case cancelled
+    case plaintextListenerRemains
 
     var errorDescription: String? {
         switch self {
         case .missingResource(let name):
             return "アプリ内の必要なファイルが見つかりません: \(name)"
+        case .plaintextListenerRemains:
+            return "Rokidに暗号化されていない接続の入口が残っているため、安全のため接続しませんでした。開発用5ピンケーブルでMacとつなぎ、もう一度起動してください。入口を閉じてから無線接続へ切り替えます。"
         case .noDevice:
             return "Rokidへ接続できませんでした。Rokidで「Wi-Fi ON」を開いてから、もう一度お試しください。改善しない場合は開発用5ピンケーブルを接続してください。"
         case .wifiUnavailable:
@@ -45,8 +48,12 @@ final class RokidConnectionManager {
     private let encryptionCacheLock = NSLock()
     private var encryptionVerdictCache:
         [String: ConnectionEncryption.Verdict] = [:]
+    /// 暗号化なしの入口が残っていて接続先を拒否したか。
+    /// 接続できずに終わったとき、利用者への案内を変えるために使う。
+    private var sawPlaintextListener = false
 
-    private(set) var serial = ""
+    // 読み書きは必ず`stateLock`を通す。外から素で読めないよう`private`にする。
+    private var serial = ""
 
     init(
         adbURL: URL,
@@ -120,6 +127,11 @@ final class RokidConnectionManager {
             Thread.sleep(forTimeInterval: 1)
         }
 
+        // 暗号化なしの入口が理由で拒否していたなら、その旨と対処を伝える。
+        // 「Wi-Fi ONを開いてください」と案内しても解決しないため。
+        if didSeePlaintextListener() {
+            throw RokidConnectionError.plaintextListenerRemains
+        }
         throw RokidConnectionError.noDevice
     }
 
@@ -136,7 +148,15 @@ final class RokidConnectionManager {
         onProgress: (String) -> Void = { _ in },
         isCancelled: () -> Bool = { false }
     ) throws -> String {
-        prepareSecureWirelessDebugging(usbSerial)
+        guard prepareSecureWirelessDebugging(usbSerial) else {
+            // USB接続そのものは安全なので操作は続けられる。ただし端末側に
+            // 暗号化されていない入口が残っている可能性があるため、記録に残す。
+            logger.log(
+                "【注意】安全な無線接続を用意できないためUSB接続を継続します。"
+                    + "端末に暗号化されていない入口が残っている可能性があります"
+            )
+            return useUSB(usbSerial)
+        }
         for _ in 0..<attempts {
             try checkCancellation(isCancelled)
             Thread.sleep(forTimeInterval: 1)
@@ -362,20 +382,12 @@ final class RokidConnectionManager {
     /// 旧版は`adb tcpip 5555`で暗号化なしのTCP待ち受けを作っていた。これは
     /// `service.adb.tcp.port`として端末に残り、再起動しても待ち受けが続くため、
     /// 同じWi-Fi内の別の機器から接続できる状態になる。見つけたら閉じる。
-    private func prepareSecureWirelessDebugging(_ usbSerial: String) {
-        let tcpPort = adb([
-            "-s", usbSerial, "shell", "getprop", "service.adb.tcp.port",
-        ], timeout: 3).output.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if tcpPort == "5555" {
-            // 旧版が残した暗号化なしの待ち受けを閉じる。
-            // adbdを再起動するので、必要なときだけ実行する。
-            logger.log("暗号化されない待ち受け（5555番）を閉じます")
-            _ = adb(["-s", usbSerial, "usb"], timeout: 8)
-            // adbdの再起動でUSB接続が一度切れる。先に眠ってから待たないと、
-            // 切れる前の接続を見て「もう繋がっている」と誤判定してしまう。
-            Thread.sleep(forTimeInterval: 2)
-            _ = adb(["-s", usbSerial, "wait-for-device"], timeout: 20)
+    /// 用意できたときだけ`true`。閉じられない入口が残る場合は`false`を返し、
+    /// 無線へは移行しない（安全側に倒す）。
+    private func prepareSecureWirelessDebugging(_ usbSerial: String) -> Bool {
+        guard closePlaintextListeners(usbSerial) else {
+            logger.log("暗号化されていない入口を閉じられないため、無線へは移行しません")
+            return false
         }
 
         let enabled = adb([
@@ -387,13 +399,90 @@ final class RokidConnectionManager {
                 ? "ワイヤレスデバッグ（暗号化）を有効化"
                 : "ワイヤレスデバッグの有効化に失敗 output=\(enabled.output)"
         )
+        return enabled.succeeded
+    }
+
+    /// 端末に開いている暗号化なしの入口を、ポート番号によらず閉じる。
+    ///
+    /// 閉じられたことを実際に読み直して確かめる。確認できなければ`false`を返す。
+    /// MacがTLSで繋いでいても、この入口が開いていれば同じWi-Fi内の別の機器から
+    /// そこへ接続できてしまうため、残したまま先へ進まない。
+    private func closePlaintextListeners(_ usbSerial: String) -> Bool {
+        guard let openPorts = plaintextListenerPorts(usbSerial) else {
+            logger.log("待ち受けの状態を確認できないため、無線へは移行しません")
+            return false
+        }
+        guard !openPorts.isEmpty else { return true }
+
+        // 閉じられなかった場合に利用者へ伝えられるよう、見つけたことを覚えておく。
+        encryptionCacheLock.lock()
+        sawPlaintextListener = true
+        encryptionCacheLock.unlock()
+        logger.log(
+            "暗号化されていない入口を閉じます ports=\(openPorts.joined(separator: ","))"
+        )
+        // 公式の戻し方。adbdをUSB専用で起動し直し、TCPの待ち受けを止める。
+        _ = adb(["-s", usbSerial, "usb"], timeout: 8)
+        // adbdの再起動でUSB接続が一度切れる。先に眠ってから待たないと、
+        // 切れる前の接続を見て「もう繋がっている」と誤判定してしまう。
+        Thread.sleep(forTimeInterval: 2)
+        _ = adb(["-s", usbSerial, "wait-for-device"], timeout: 20)
+
+        // 再起動後も残る設定は、権限があれば明示的に消す。
+        // 消せない端末もあるため、成否は下の読み直しで判断する。
+        for property in Self.plaintextPortProperties {
+            _ = adb([
+                "-s", usbSerial, "shell", "setprop", property, "-1",
+            ], timeout: 5)
+        }
+
+        guard let remaining = plaintextListenerPorts(usbSerial) else {
+            logger.log("閉じられたことを確認できないため、無線へは移行しません")
+            return false
+        }
+        guard remaining.isEmpty else {
+            logger.log(
+                "暗号化されていない入口が残っています ports=\(remaining.joined(separator: ","))"
+            )
+            return false
+        }
+        logger.log("暗号化されていない入口を閉じました")
+        return true
+    }
+
+    private static let plaintextPortProperties = [
+        "service.adb.tcp.port",
+        "persist.adb.tcp.port",
+    ]
+
+    /// 端末が申告している、暗号化なしの待ち受けポート。
+    ///
+    /// 読み取れなかった場合は`nil`を返す。空の結果を返すと「入口はない」と
+    /// 区別がつかず、読めなかっただけで安全と判定してしまうため。
+    private func plaintextListenerPorts(_ deviceSerial: String) -> [String]? {
+        var values: [String] = []
+        for property in Self.plaintextPortProperties {
+            let result = adb([
+                "-s", deviceSerial, "shell", "getprop", property,
+            ], timeout: 3)
+            guard result.succeeded else {
+                logger.log("待ち受けの状態を読み取れません property=\(property)")
+                return nil
+            }
+            // 標準出力と標準エラーは同じ経路で受け取るため、警告が混ざりうる。
+            // 行に分けてから調べ、待ち受けを取りこぼさないようにする。
+            values += result.output
+                .split(whereSeparator: \.isNewline)
+                .map(String.init)
+        }
+        return ConnectionEncryption.activeListenerPorts(values)
     }
 
     /// `adb tcpip 5555`が作る既定の暗号化なし接続先かどうか。
     ///
     /// これは繋ぐ前に使える簡易のふるい分けにすぎない。`adb tcpip`は5555以外の
     /// ポートも使えるため、これだけでは暗号化を保証できない。実際の判定は
-    /// 接続後に`encryptionRejectionReason(_:)`が端末の状態を読んで行う。
+    /// 接続後に`adoptionRejectionReason(_:)`が端末の状態を読んで行う。
     private func isDefaultPlaintextAddress(_ address: String) -> Bool {
         address.hasSuffix(":5555")
     }
@@ -524,7 +613,7 @@ final class RokidConnectionManager {
             }
             // 採用して保存する前に、暗号化されていることを端末の状態から確かめる。
             // ポート番号だけでは判定できないため、ここまで繋いでから確認する。
-            guard let reason = encryptionRejectionReason(candidate.address)
+            guard let reason = adoptionRejectionReason(candidate.address)
             else {
                 return use(candidate.address)
             }
@@ -551,40 +640,39 @@ final class RokidConnectionManager {
         _ = adb(["disconnect", candidate.address], timeout: 3)
     }
 
-    /// 接続先が暗号化されていない場合に、その理由を返す。暗号化されていればnil。
+    /// この接続先を採用してよくない場合に、その理由を返す。採用してよければnil。
     ///
     /// 端末の状態を読むにはいったん接続する必要があるが、ここで実行するのは
     /// `getprop` と `settings get` の読み取りだけで、端末には何も書き込まない。
-    /// 暗号化されていないと分かった接続はこの直後に切断する。ただし利用者が
-    /// もともと繋いでいた接続は切らない。
+    /// 採用しないと決めた接続はこの直後に切断する。ただし利用者がもともと
+    /// 繋いでいた接続は切らない。
     ///
     /// 判定結果を覚えておく。ひとつの接続試行のあいだに同じ接続先を
     /// 何度も問い合わせると、待ち時間が積み上がるため。
-    private func encryptionRejectionReason(_ address: String) -> String? {
+    private func adoptionRejectionReason(_ address: String) -> String? {
         encryptionCacheLock.lock()
         let cached = encryptionVerdictCache[address]
         encryptionCacheLock.unlock()
         if let cached {
+            noteVerdict(cached)
             return ConnectionEncryption.rejectionReason(for: cached)
         }
 
-        // 標準出力と標準エラーは同じ経路で受け取るため、警告が混ざりうる。
-        // 行に分けてから比べ、待ち受けポートを取りこぼさないようにする。
-        let plaintextPorts = [
-            "service.adb.tcp.port",
-            "persist.adb.tcp.port",
-        ].flatMap { property in
-            adb([
-                "-s", address, "shell", "getprop", property,
-            ], timeout: 3)
-                .output
-                .split(whereSeparator: \.isNewline)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard let plaintextPorts = plaintextListenerPorts(address) else {
+            // 読み取れないときは採用しない。安全側に倒す。
+            return "端末の待ち受けの状態を確認できません"
         }
-        let wifiDebugging = adb([
+        // 標準出力と標準エラーは同じ経路で受け取るため、警告が混ざりうる。
+        // 行に分けてから比べ、値を取りこぼさないようにする。
+        let wifiResult = adb([
             "-s", address, "shell", "settings", "get", "global",
             "adb_wifi_enabled",
         ], timeout: 3)
+        guard wifiResult.succeeded else {
+            // 読み取れないときは採用しない。安全側に倒す。
+            return "端末のワイヤレスデバッグの状態を確認できません"
+        }
+        let wifiDebugging = wifiResult
             .output
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -594,11 +682,12 @@ final class RokidConnectionManager {
             plaintextPorts: plaintextPorts,
             wirelessDebuggingEnabled: wifiDebugging.contains("1")
         )
+        noteVerdict(verdict)
         // 覚えておくのは、ひとつの接続試行のあいだに変わらない判定だけにする。
         // ワイヤレスデバッグの有効・無効は端末の準備しだいで後から変わる。
         // これを覚えてしまうと、繰り返し待ち直す仕組みが効かなくなる。
         switch verdict {
-        case .plaintextListener, .notNetworkAddress:
+        case .plaintextConnection, .plaintextListenerRemains, .notNetworkAddress:
             encryptionCacheLock.lock()
             encryptionVerdictCache[address] = verdict
             encryptionCacheLock.unlock()
@@ -608,11 +697,29 @@ final class RokidConnectionManager {
         return ConnectionEncryption.rejectionReason(for: verdict)
     }
 
+    /// 暗号化なしの入口が理由で拒否したことを覚えておく。
+    /// 接続できずに終わったとき、利用者への案内を変えるために使う。
+    private func noteVerdict(_ verdict: ConnectionEncryption.Verdict) {
+        guard ConnectionEncryption.isPlaintextListenerProblem(verdict) else {
+            return
+        }
+        encryptionCacheLock.lock()
+        sawPlaintextListener = true
+        encryptionCacheLock.unlock()
+    }
+
+    private func didSeePlaintextListener() -> Bool {
+        encryptionCacheLock.lock()
+        defer { encryptionCacheLock.unlock() }
+        return sawPlaintextListener
+    }
+
     /// 接続試行を始めるときに、覚えていた判定結果を捨てる。
     /// 端末の状態は起動のたびに変わりうるため、持ち越さない。
     private func forgetEncryptionVerdicts() {
         encryptionCacheLock.lock()
         encryptionVerdictCache.removeAll()
+        sawPlaintextListener = false
         encryptionCacheLock.unlock()
     }
 
