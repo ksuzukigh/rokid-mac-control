@@ -280,10 +280,6 @@ final class KeyboardController {
             return hasModifier ? nil : .left
         case 124:
             return hasModifier ? nil : .right
-        case 125:
-            return hasModifier ? nil : .down
-        case 126:
-            return hasModifier ? nil : .up
         case 36, 76:
             return hasModifier ? nil : .enter
         case 53:

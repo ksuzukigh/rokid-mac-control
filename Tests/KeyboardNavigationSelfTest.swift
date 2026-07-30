@@ -32,7 +32,7 @@ enum KeyboardNavigationSelfTest {
     static func main() {
         testShortcutCoordinates()
         testDirectShortcuts()
-        testArrowsAndEnterRequireAppList()
+        testLeftRightAndEnterRequireAppList()
         testEscapeAlwaysSendsBack()
         testSelectionSurvivesEnterAndEscape()
         testSelectionEndsOnHomeMemoAndMouse()
@@ -104,14 +104,14 @@ enum KeyboardNavigationSelfTest {
         )
     }
 
-    // MARK: - 矢印とEnter
+    // MARK: - 左右キーとEnter
 
-    /// Aを押す前の矢印とEnterはADBへ送らない。Aの後だけ送る。
-    private static func testArrowsAndEnterRequireAppList() {
+    /// Aを押す前の左右キーとEnterはADBへ送らない。Aの後だけ送る。
+    private static func testLeftRightAndEnterRequireAppList() {
         let sink = MockCommandSink()
         let router = KeyboardCommandRouter(sink: sink)
 
-        for key in [RokidKey.left, .right, .up, .down, .enter] {
+        for key in [RokidKey.left, .right, .enter] {
             precondition(router.handle(key) == false)
         }
         precondition(sink.drain().isEmpty)
@@ -119,24 +119,18 @@ enum KeyboardNavigationSelfTest {
         router.handle(.applications)
         precondition(sink.drain() == [.openShortcut(.applications)])
 
-        // 上下も左右と同じように送る。
         router.handle(.left)
         router.handle(.right)
-        router.handle(.up)
-        router.handle(.down)
         precondition(
             sink.drain() == [
                 .keyEvent("KEYCODE_DPAD_LEFT"),
                 .keyEvent("KEYCODE_DPAD_RIGHT"),
-                .keyEvent("KEYCODE_DPAD_UP"),
-                .keyEvent("KEYCODE_DPAD_DOWN"),
             ]
         )
 
         // H・M・マウス操作で終えたあとは、もう送らない。
         router.endSelection()
         router.handle(.left)
-        router.handle(.up)
         router.handle(.enter)
         precondition(sink.drain().isEmpty)
     }
@@ -161,7 +155,7 @@ enum KeyboardNavigationSelfTest {
 
     // MARK: - 選択状態の継続と終了
 
-    /// アプリを開いてEscで一覧へ戻っても、矢印がそのまま使える。
+    /// アプリを開いてEscで一覧へ戻っても、左右キーがそのまま使える。
     ///
     /// 8秒で自動的に切る設計は実機で使いものにならなかったため、
     /// EnterでもEscでも時間経過でも選択状態を終えない。
@@ -180,14 +174,12 @@ enum KeyboardNavigationSelfTest {
         precondition(sink.drain() == [.keyEvent("KEYCODE_BACK")])
         precondition(router.isSelectingApp, "Escで選択状態が切れている")
 
-        // 戻ったあとも矢印とEnterがそのまま効く。
+        // 戻ったあとも左右キーとEnterがそのまま効く。
         router.handle(.left)
-        router.handle(.down)
         router.handle(.enter)
         precondition(
             sink.drain() == [
                 .keyEvent("KEYCODE_DPAD_LEFT"),
-                .keyEvent("KEYCODE_DPAD_DOWN"),
                 .keyEvent("KEYCODE_ENTER"),
             ]
         )
@@ -219,7 +211,7 @@ enum KeyboardNavigationSelfTest {
             )
             precondition(!router.isSelectingApp)
 
-            // 終えたあとの矢印は送らない。
+            // 終えたあとの左右キーは送らない。
             _ = sink.drain()
             router.handle(.right)
             precondition(sink.drain().isEmpty, "\(ending): 終了後に矢印を送っている")
