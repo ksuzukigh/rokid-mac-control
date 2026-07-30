@@ -38,6 +38,7 @@ enum KeyboardNavigationSelfTest {
         testSelectionEndsOnHomeMemoAndMouse()
         testRecoversAfterFailedCommand()
         testGuideText()
+        testDeviceWakePolicy()
         print("Keyboard navigation self-test passed")
     }
 
@@ -264,5 +265,25 @@ enum KeyboardNavigationSelfTest {
         }
         precondition(memo.lowerBound < home.lowerBound)
         precondition(home.lowerBound < apps.lowerBound)
+    }
+
+    /// 放置後のキー操作では眠っている端末だけを起こす。
+    private static func testDeviceWakePolicy() {
+        precondition(
+            !DeviceWakePolicy.shouldWake(
+                powerOutput: "  mWakefulness=Awake\n"
+            )
+        )
+        precondition(
+            DeviceWakePolicy.shouldWake(
+                powerOutput: "  mWakefulness=Asleep\n"
+            )
+        )
+        precondition(
+            DeviceWakePolicy.shouldWake(
+                powerOutput: "  mWakefulness=Dozing\n"
+            )
+        )
+        precondition(DeviceWakePolicy.shouldWake(powerOutput: ""))
     }
 }

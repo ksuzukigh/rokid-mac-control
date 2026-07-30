@@ -25,9 +25,13 @@ private final class ScreenSizeStore {
 /// `KeyboardCommandRouter`から呼ばれる。命令の並びを決めるのはRouter側で、
 /// ここは実際にADBを実行するだけに絞ってある。
 private final class ADBCommandSink: RokidCommandSink {
+    private static let wakeCheckInterval: TimeInterval = 4
+
     private let connection: RokidConnectionManager
     private let logger: AppLogger
     private let screenSize: ScreenSizeStore
+    /// `KeyboardController`の直列キューからだけ読み書きする。
+    private var lastUserInputAt: Date?
 
     init(
         connection: RokidConnectionManager,
@@ -50,10 +54,31 @@ private final class ADBCommandSink: RokidCommandSink {
 
     private func sendKeyEvent(_ androidKey: String) {
         let serial = connection.currentSerial()
+        wakeIfNeeded(serial: serial)
         _ = connection.runADB([
             "-s", serial, "shell", "input", "keyevent", androidKey,
         ])
+        lastUserInputAt = Date()
         logger.log("キー \(androidKey)")
+    }
+
+    private func wakeIfNeeded(serial: String) {
+        if let lastUserInputAt,
+           Date().timeIntervalSince(lastUserInputAt)
+                < Self.wakeCheckInterval {
+            return
+        }
+        let power = connection.runADB([
+            "-s", serial, "shell", "dumpsys", "power",
+        ])
+        guard DeviceWakePolicy.shouldWake(powerOutput: power.output) else {
+            return
+        }
+        _ = connection.runADB([
+            "-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP",
+        ])
+        Thread.sleep(forTimeInterval: 0.15)
+        logger.log("キー操作のためRokidを起動")
     }
 
     private func openShortcut(_ shortcut: LauncherShortcut) {
@@ -74,6 +99,7 @@ private final class ADBCommandSink: RokidCommandSink {
             "-s", serial, "shell", "input", "tap",
             "\(Int(point.x))", "\(Int(point.y))",
         ])
+        lastUserInputAt = Date()
         logger.log("下段を開く \(shortcut.title)")
     }
 }
