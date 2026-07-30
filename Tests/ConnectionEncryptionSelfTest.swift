@@ -5,6 +5,7 @@ enum ConnectionEncryptionSelfTest {
     static func main() {
         testPortExtraction()
         testActiveListenerPortValues()
+        testUSBTLSAddress()
         testDefaultPlaintextPortRejected()
         testNonDefaultPlaintextPortRejected()
         testPersistentPlaintextPortRejected()
@@ -57,6 +58,64 @@ enum ConnectionEncryptionSelfTest {
             ConnectionEncryption.activeListenerPorts(
                 ["5555", "null", "7000", "5555", ""]
             ) == ["5555", "7000"]
+        )
+    }
+
+    // MARK: - USBから取得するTLS接続先
+
+    private static func testUSBTLSAddress() {
+        let actualRV101Output =
+            "15: wlan0    inet 192.168.11.46/24 brd 192.168.11.255 "
+            + "scope global wlan0\\       valid_lft forever preferred_lft forever"
+        let address = ConnectionEncryption.usbTLSAddress(
+            ipAddressOutput: actualRV101Output,
+            tlsPortOutput: "37535\n"
+        )
+        precondition(address == "192.168.11.46:37535")
+
+        // ADBの警告が別行に混ざっても、端末が返した値を取得できる。
+        precondition(
+            ConnectionEncryption.usbTLSAddress(
+                ipAddressOutput:
+                    "adb: warning: temporary message\n"
+                    + "15: wlan0    inet 10.0.0.8/24 scope global wlan0\n",
+                tlsPortOutput: "adb: warning: temporary message\n42031\n"
+            ) == "10.0.0.8:42031"
+        )
+
+        // IP、ポート、読み取り結果のいずれかが不正なら候補を作らない。
+        for invalidIP in [
+            "",
+            "15: wlan0    inet 999.168.11.46/24 scope global wlan0",
+            "15: wlan0    inet 127.0.0.1/8 scope host wlan0",
+            "15: wlan0    inet 224.0.0.1/24 scope global wlan0",
+        ] {
+            precondition(
+                ConnectionEncryption.usbTLSAddress(
+                    ipAddressOutput: invalidIP,
+                    tlsPortOutput: "37535"
+                ) == nil
+            )
+        }
+        for invalidPort in ["", "-1", "0", "abc", "70000", "37535\n42031"] {
+            precondition(
+                ConnectionEncryption.usbTLSAddress(
+                    ipAddressOutput: actualRV101Output,
+                    tlsPortOutput: invalidPort
+                ) == nil
+            )
+        }
+
+        // USBから作った候補でも、平文入口が残っていれば採用しない。
+        guard let address else {
+            preconditionFailure("実機形式のUSB情報からTLS候補を作れない")
+        }
+        precondition(
+            ConnectionEncryption.verdict(
+                address: address,
+                plaintextPorts: ["5555", ""],
+                wirelessDebuggingEnabled: true
+            ) == .plaintextListenerRemains(ports: ["5555"])
         )
     }
 

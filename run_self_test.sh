@@ -9,6 +9,7 @@ RUNNER_TEST_BINARY="$BUILD/ProcessRunnerSelfTest"
 NAVIGATION_TEST_BINARY="$BUILD/KeyboardNavigationSelfTest"
 ENCRYPTION_TEST_BINARY="$BUILD/ConnectionEncryptionSelfTest"
 OUTPUT="$BUILD/vision-compositor-self-test.png"
+INFO_PLIST="$ROOT/Resources/RokidControl-Info.plist"
 
 mkdir -p "$BUILD"
 
@@ -71,3 +72,17 @@ xcrun swiftc \
     "$ROOT/Tests/ConnectionEncryptionSelfTest.swift"
 
 "$ENCRYPTION_TEST_BINARY"
+
+LOCAL_NETWORK_DESCRIPTION="$(
+    /usr/libexec/PlistBuddy \
+        -c "Print :NSLocalNetworkUsageDescription" \
+        "$INFO_PLIST"
+)"
+BONJOUR_SERVICE="$(
+    /usr/libexec/PlistBuddy \
+        -c "Print :NSBonjourServices:0" \
+        "$INFO_PLIST"
+)"
+test -n "$LOCAL_NETWORK_DESCRIPTION"
+test "$BONJOUR_SERVICE" = "_adb-tls-connect._tcp"
+echo "Bundle metadata self-test passed"

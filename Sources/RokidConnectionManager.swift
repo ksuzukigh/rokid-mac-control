@@ -157,11 +157,24 @@ final class RokidConnectionManager {
             logger.log("無線を有効にできないためUSB接続を継続します")
             return useUSB(usbSerial)
         }
+        var usbTLSAddress: String?
         for _ in 0..<attempts {
             try checkCancellation(isCancelled)
             Thread.sleep(forTimeInterval: 1)
+            // adbdの起動途中でTLSポートが変わる可能性があるため毎回読み直す。
+            // 一時的に読めなかった場合は、直前に確認できた候補を捨てない。
+            if let currentUSBAddress = secureWiFiAddressFromUSB(usbSerial) {
+                if currentUSBAddress != usbTLSAddress {
+                    logger.log(
+                        "USBから暗号化接続先を取得 address=\(currentUSBAddress)"
+                    )
+                }
+                usbTLSAddress = currentUSBAddress
+            }
             if let connected = connectToSecureWiFi(
-                recent: recent,
+                // 実機がUSB越しに申告した現在のTLS接続先を最優先する。
+                // 取得できない間は、直前・保存済み・mDNSの従来経路を使う。
+                recent: usbTLSAddress ?? recent,
                 onProgress: onProgress
             ) {
                 return connected
@@ -484,6 +497,32 @@ final class RokidConnectionManager {
                 .map(String.init)
         }
         return ConnectionEncryption.activeListenerPorts(values)
+    }
+
+    /// mDNS通知が見えない場合に、USB経由で現在のTLS接続先を取得する。
+    ///
+    /// `service.adb.tls.port`はAndroid標準の暗号化サーバーが申告するポート。
+    /// 暗号化なしの`service.adb.tcp.port`は、ここでは絶対に使わない。
+    private func secureWiFiAddressFromUSB(_ usbSerial: String) -> String? {
+        let portResult = adb([
+            "-s", usbSerial, "shell", "getprop", "service.adb.tls.port",
+        ], timeout: 3)
+        guard portResult.succeeded else {
+            return nil
+        }
+
+        let addressResult = adb([
+            "-s", usbSerial, "shell", "ip", "-4", "-o", "addr", "show",
+            "wlan0",
+        ], timeout: 3)
+        guard addressResult.succeeded else {
+            return nil
+        }
+
+        return ConnectionEncryption.usbTLSAddress(
+            ipAddressOutput: addressResult.output,
+            tlsPortOutput: portResult.output
+        )
     }
 
     /// `adb tcpip 5555`が作る既定の暗号化なし接続先かどうか。
