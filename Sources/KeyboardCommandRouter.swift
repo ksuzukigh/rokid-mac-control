@@ -20,8 +20,6 @@ protocol RokidCommandSink: AnyObject {
 enum RokidKey: Equatable {
     case left
     case right
-    case up
-    case down
     case enter
     case escape
     case home
@@ -73,8 +71,8 @@ final class KeyboardCommandRouter {
             selection.begin()
             return true
 
-        case .left, .right, .up, .down:
-            // アプリ一覧を開いてからだけ方向キーとして送る。それ以前は
+        case .left, .right:
+            // アプリ一覧を開いてからだけ左右キーとして送る。それ以前は
             // Rokid側の選択状態と食い違うため、ADBへ送らない。
             guard selection.isActive else { return false }
             sink.send(.keyEvent(Self.androidKey(for: key)))
@@ -113,10 +111,6 @@ final class KeyboardCommandRouter {
             return "KEYCODE_DPAD_LEFT"
         case .right:
             return "KEYCODE_DPAD_RIGHT"
-        case .up:
-            return "KEYCODE_DPAD_UP"
-        case .down:
-            return "KEYCODE_DPAD_DOWN"
         case .enter:
             return "KEYCODE_ENTER"
         case .escape:

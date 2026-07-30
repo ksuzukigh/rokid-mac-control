@@ -185,7 +185,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             action: #selector(visibilityChanged(_:))
         )
         slider.isContinuous = true
-        // 矢印キーはRokidの操作へ回すため、このスライダーはマウス操作だけにする。
+        // 左右キーはRokidの操作へ回すため、このスライダーはマウス操作だけにする。
         slider.refusesFirstResponder = true
         slider.toolTip = "文字とアイコンの明るさ・太さを調整します（マウスで動かします）"
         slider.widthAnchor.constraint(equalToConstant: 185).isActive = true

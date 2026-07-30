@@ -83,6 +83,19 @@ cp \
     "$VENDOR/Android-Platform-Tools-NOTICE.txt" \
     "$LICENSES/Android-Platform-Tools-NOTICE.txt"
 
+LOCAL_NETWORK_DESCRIPTION="$(
+    /usr/libexec/PlistBuddy \
+        -c "Print :NSLocalNetworkUsageDescription" \
+        "$CONTENTS/Info.plist"
+)"
+BONJOUR_SERVICE="$(
+    /usr/libexec/PlistBuddy \
+        -c "Print :NSBonjourServices:0" \
+        "$CONTENTS/Info.plist"
+)"
+test -n "$LOCAL_NETWORK_DESCRIPTION"
+test "$BONJOUR_SERVICE" = "_adb-tls-connect._tcp"
+
 chmod 755 \
     "$MACOS/Rokid Control" \
     "$BIN/adb" \

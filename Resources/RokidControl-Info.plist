@@ -30,6 +30,12 @@
     <string>public.app-category.utilities</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 ksuzukigh</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Rokidを同じWi-Fi上で見つけ、暗号化された接続で画面表示と操作を行うために使用します。</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_adb-tls-connect._tcp</string>
+    </array>
     <key>NSScreenCaptureUsageDescription</key>
     <string>Rokidのカメラ映像に文字やアイコンを重ねたライブ映像を作るために使用します。</string>
     <key>NSHighResolutionCapable</key>

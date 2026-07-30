@@ -34,7 +34,7 @@ enum LauncherShortcut: Int, CaseIterable {
     }
 }
 
-/// `A`でアプリ一覧を開いてから続く、矢印キーとEnterが有効な状態。
+/// `A`でアプリ一覧を開いてから続く、左右キーとEnterが有効な状態。
 ///
 /// 当初は8秒で自動的に切る設計だったが、実機で試すと、アプリを開いて`Esc`で
 /// 一覧へ戻ったときに矢印が死んでしまい使いものにならなかった。そのため
@@ -60,7 +60,7 @@ struct AppSelectionState {
 /// Mac画面へ常時表示する操作案内。
 ///
 /// 通常時はRokidの下段アイコンと同じ順で並べる。アプリ一覧を選んでいる間だけ
-/// 矢印キーの案内へ切り替える。キー割り当て自体は変わらない。
+/// 左右キーの案内へ切り替える。キー割り当て自体は変わらない。
 enum NavigationGuide {
     static let standard = "M  メモ　　H  Home　　A  アプリ"
     static let appSelection = "← →  選択　　Enter  決定　　Esc  戻る"

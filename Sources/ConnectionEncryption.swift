@@ -63,6 +63,55 @@ enum ConnectionEncryption {
             }
     }
 
+    /// USB接続中のRokidが申告したWi-FiアドレスとTLSポートから接続先を作る。
+    ///
+    /// RV101ではTLSサーバーが起動していても、ルーターやmacOS側の状態によって
+    /// `_adb-tls-connect._tcp`のmDNS通知が見えないことがある。信頼済みのUSB経由で
+    /// 読み取った値だけを予備候補にする。ここでは候補を組み立てるだけで、
+    /// 採用前には別途、Rokid確認と平文入口が残っていないことの確認を行う。
+    static func usbTLSAddress(
+        ipAddressOutput: String,
+        tlsPortOutput: String
+    ) -> String? {
+        let pattern = #"\binet\s+((?:\d{1,3}\.){3}\d{1,3})/"#
+        guard
+            let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(
+                in: ipAddressOutput,
+                range: NSRange(ipAddressOutput.startIndex..., in: ipAddressOutput)
+            ),
+            let addressRange = Range(match.range(at: 1), in: ipAddressOutput)
+        else {
+            return nil
+        }
+
+        let address = String(ipAddressOutput[addressRange])
+        let octets = address.split(separator: ".", omittingEmptySubsequences: false)
+        guard
+            octets.count == 4,
+            let first = Int(octets[0]),
+            first > 0,
+            first < 224,
+            first != 127,
+            octets.allSatisfy({
+                guard let value = Int($0) else { return false }
+                return value >= 0 && value <= 255
+            })
+        else {
+            return nil
+        }
+
+        let ports = activeListenerPorts(
+            tlsPortOutput
+                .split(whereSeparator: \.isNewline)
+                .map(String.init)
+        )
+        guard ports.count == 1, let port = ports.first else {
+            return nil
+        }
+        return "\(address):\(port)"
+    }
+
     /// 端末が申告した状態から、この接続先を採用してよいかを判定する。
     ///
     /// - Parameters:
