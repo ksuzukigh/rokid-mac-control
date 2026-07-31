@@ -135,7 +135,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             workQueue.async { [weak self] in
                 guard let self else { return }
                 do {
-                    connection.prepareADBServer()
+                    try connection.prepareADBServer()
                     _ = try connection.connectForStartup(
                         onProgress: { [weak self] message in
                             self?.updateConnectingStatus(message)
@@ -245,6 +245,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             // 後片付けのADBを実行できるようキャンセル状態を解除する。
             runner?.resumeAfterCancellation()
             connection?.stopMacMode()
+            connection?.shutdownADBServer()
             // terminateLater中はメインのDispatchQueueが進まない場合がある。
             // RunLoopへ直接積み、終了の返答を必ずAppKitへ返す。
             CFRunLoopPerformBlock(
@@ -1464,7 +1465,8 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         environment["ADB"] = resources.adb.path
         environment["SCRCPY_ICON_DIR"] = resources.scrcpyIcons.path
         environment["SCRCPY_SERVER_PATH"] = resources.server.path
-        environment["ANDROID_ADB_SERVER_PORT"] = "5037"
+        environment["ANDROID_ADB_SERVER_PORT"] =
+            ADBServerPolicy.dedicatedPort
         // Keep scrcpy's SDL helper out of the Dock. Rokid Control remains the
         // foreground application and raises the scrcpy window via Accessibility.
         environment["SDL_MAC_BACKGROUND_APP"] = "1"

@@ -2,10 +2,12 @@ import Foundation
 
 enum RokidConnectionError: LocalizedError {
     case missingResource(String)
+    case adbServerFailed
     case noDevice
     case wifiUnavailable
     case watchdogFailed
     case screenTimeoutFailed
+    case localNetworkUnavailable
     case cancelled
     case plaintextListenerRemains
     case safetyUnverified
@@ -14,6 +16,8 @@ enum RokidConnectionError: LocalizedError {
         switch self {
         case .missingResource(let name):
             return "アプリ内の必要なファイルが見つかりません: \(name)"
+        case .adbServerFailed:
+            return "Mac側の接続処理を開始できませんでした。Rokid Controlを終了し、もう一度開いてください。"
         case .safetyUnverified:
             return "Rokidの安全確認ができなかったため、起動を中止しました。暗号化されていない接続の入口が残っている可能性があります。Rokidを再起動し、開発用5ピンケーブルでMacとつないでから、もう一度起動してください。"
         case .plaintextListenerRemains:
@@ -26,6 +30,8 @@ enum RokidConnectionError: LocalizedError {
             return "Mac操作中のWi-Fi監視を開始できませんでした。"
         case .screenTimeoutFailed:
             return "Mac操作中の画面休止を安全に設定できませんでした。Mac操作を開始せず、保存済みの元の設定は次回起動時にも復元します。"
+        case .localNetworkUnavailable:
+            return "macOSがRokid Controlのローカルネットワーク通信を止めています。「システム設定」→「プライバシーとセキュリティ」→「ローカルネットワーク」で「Rokid Control」を一度オフにしてからオンへ戻し、アプリを開き直してください。"
         case .cancelled:
             return "接続をキャンセルしました。"
         }
@@ -57,6 +63,8 @@ final class RokidConnectionManager {
     /// 暗号化なしの入口が残っていて接続先を拒否したか。
     /// 接続できずに終わったとき、利用者への案内を変えるために使う。
     private var sawPlaintextListener = false
+    /// ADBがmacOSからローカルネットワーク経路を拒否されたか。
+    private var sawLocalNetworkBlock = false
 
     // 読み書きは必ず`stateLock`を通す。外から素で読めないよう`private`にする。
     private var serial = ""
@@ -87,8 +95,29 @@ final class RokidConnectionManager {
         )
     }
 
-    func prepareADBServer() {
-        _ = adb(["start-server"], timeout: 8)
+    func prepareADBServer() throws {
+        // ADBサーバーはアプリ終了後も常駐できる。古い開発ビルドが起動した
+        // プロセスを再利用すると、macOSのローカルネットワーク許可が現在の
+        // 正式版へ反映されず、接続だけが「No route to host」で拒否される。
+        // 専用ポートのサーバーを起動ごとに作り直し、現在のアプリの許可を使う。
+        _ = adb(["kill-server"], timeout: 8)
+        let started = adb(["start-server"], timeout: 8)
+        guard started.succeeded else {
+            logger.log("専用ADBサーバーを開始できません output=\(started.output)")
+            throw RokidConnectionError.adbServerFailed
+        }
+        logger.log(
+            "専用ADBサーバー開始 port=\(ADBServerPolicy.dedicatedPort)"
+        )
+    }
+
+    func shutdownADBServer() {
+        let stopped = adb(["kill-server"], timeout: 8)
+        logger.log(
+            stopped.succeeded
+                ? "専用ADBサーバー終了"
+                : "専用ADBサーバー終了失敗 output=\(stopped.output)"
+        )
     }
 
     func connectForStartup(
@@ -138,6 +167,9 @@ final class RokidConnectionManager {
         if didSeePlaintextListener() {
             throw RokidConnectionError.plaintextListenerRemains
         }
+        if didSeeLocalNetworkBlock() {
+            throw RokidConnectionError.localNetworkUnavailable
+        }
         throw RokidConnectionError.noDevice
     }
 
@@ -182,6 +214,9 @@ final class RokidConnectionManager {
             ) {
                 return connected
             }
+        }
+        if didSeeLocalNetworkBlock() {
+            throw RokidConnectionError.localNetworkUnavailable
         }
         logger.log("暗号化接続を用意できないためUSB接続を継続します")
         return useUSB(usbSerial)
@@ -565,7 +600,19 @@ final class RokidConnectionManager {
     }
 
     private func connect(_ address: String) -> Bool {
-        _ = adb(["connect", address], timeout: 5)
+        let result = adb(["connect", address], timeout: 5)
+        if ADBServerPolicy.indicatesLocalNetworkBlock(result.output) {
+            encryptionCacheLock.lock()
+            sawLocalNetworkBlock = true
+            encryptionCacheLock.unlock()
+            logger.log(
+                "ローカルネットワーク通信を拒否されました serial=\(address)"
+            )
+        } else if !result.succeeded {
+            logger.log(
+                "接続試行失敗 serial=\(address) output=\(result.output)"
+            )
+        }
         return isConnected(address)
     }
 
@@ -773,12 +820,19 @@ final class RokidConnectionManager {
         return sawPlaintextListener
     }
 
+    private func didSeeLocalNetworkBlock() -> Bool {
+        encryptionCacheLock.lock()
+        defer { encryptionCacheLock.unlock() }
+        return sawLocalNetworkBlock
+    }
+
     /// 接続試行を始めるときに、覚えていた判定結果を捨てる。
     /// 端末の状態は起動のたびに変わりうるため、持ち越さない。
     private func forgetEncryptionVerdicts() {
         encryptionCacheLock.lock()
         encryptionVerdictCache.removeAll()
         sawPlaintextListener = false
+        sawLocalNetworkBlock = false
         encryptionCacheLock.unlock()
     }
 
