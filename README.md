@@ -28,9 +28,13 @@ Rokidのカメラ映像を背景にして、Rokidの文字やアイコンを重�
 
 Rokid Controlを開いたまま、用途に合わせて3つの撮影方法を使い分けられます。撮影が終わるとライブ映像へ自動で戻ります。
 
+**Photo to Macとは？**
+
+[Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)は、Rokidで見ている景色を撮影し、その写真を同じWi-Fi上のMacへ直接送る別アプリです。写真はMacの「ピクチャ」にある「Rokid Inbox」フォルダへ自動で入り、スマートフォンやクラウドサービスは使いません。最初に一度だけ、RokidとMacへのセットアップが必要です。
+
 | 撮影方法 | Mac側の動作 | 写真の保存先 |
 | --- | --- | --- |
-| [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac) | 撮影後にライブ映像へ自動復帰 | Macへ自動転送 |
+| [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)（別アプリ） | 撮影後にライブ映像へ自動復帰 | Macの「Rokid Inbox」へ自動転送 |
 | Rokid純正「カメラ」 | カラー撮影画面へ自動で切り替わり、終了後にライブ映像へ復帰 | Rokid本体 |
 | テンプル右上の撮影ボタン | 撮影中だけライブ映像を一時停止し、撮影終了後に自動復帰 | Rokid本体 |
 
