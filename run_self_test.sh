@@ -9,6 +9,7 @@ RUNNER_TEST_BINARY="$BUILD/ProcessRunnerSelfTest"
 NAVIGATION_TEST_BINARY="$BUILD/KeyboardNavigationSelfTest"
 ENCRYPTION_TEST_BINARY="$BUILD/ConnectionEncryptionSelfTest"
 SCREEN_TIMEOUT_TEST_BINARY="$BUILD/ScreenTimeoutPolicySelfTest"
+ADB_SERVER_POLICY_TEST_BINARY="$BUILD/ADBServerPolicySelfTest"
 OUTPUT="$BUILD/vision-compositor-self-test.png"
 INFO_PLIST="$ROOT/Resources/RokidControl-Info.plist"
 
@@ -84,6 +85,17 @@ xcrun swiftc \
     "$ROOT/Tests/ConnectionEncryptionSelfTest.swift"
 
 "$ENCRYPTION_TEST_BINARY"
+
+xcrun swiftc \
+    -O \
+    -swift-version 5 \
+    -parse-as-library \
+    -target "$HOST_ARCH-apple-macos12.3" \
+    -o "$ADB_SERVER_POLICY_TEST_BINARY" \
+    "$ROOT/Sources/ADBServerPolicy.swift" \
+    "$ROOT/Tests/ADBServerPolicySelfTest.swift"
+
+"$ADB_SERVER_POLICY_TEST_BINARY"
 
 LOCAL_NETWORK_DESCRIPTION="$(
     /usr/libexec/PlistBuddy \
