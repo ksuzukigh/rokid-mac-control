@@ -4,7 +4,7 @@ Rokid AI Glasses RV101の画面をMacに表示し、Macのマウスとキーボ�
 
 ![MacからRokid AI Glassesを操作するイメージ](docs/images/mac-control-overview.png)
 
-**現在のバージョン: 1.2.3**
+**現在のバージョン: 1.2.4**
 
 [変更履歴を見る](CHANGELOG.md)
 
@@ -26,19 +26,21 @@ Rokidのカメラ映像を背景にして、Rokidの文字やアイコンを重�
 
 ### 撮影のたびにRokid Controlを開き直さなくていい
 
-Rokid Controlを開いたまま、用途に合わせて3つの撮影方法を使い分けられます。撮影が終わるとライブ映像へ自動で戻ります。
+Rokid Controlを開いたまま、用途に合わせて3つの撮影方法を使い分けられます。「ライブ映像」と「背景なし（省電力）」のどちらでも撮影できます。
 
 **Photo to Macとは？**
 
 [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)は、Rokidで見ている景色を撮影し、その写真を同じWi-Fi上のMacへ直接送る別アプリです。写真はMacの「ピクチャ」にある「Rokid Inbox」フォルダへ自動で入り、スマートフォンやクラウドサービスは使いません。最初に一度だけ、RokidとMacへのセットアップが必要です。
 
-| 撮影方法 | Mac側の動作 | 写真の保存先 |
-| --- | --- | --- |
-| [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)（別アプリ） | 撮影後にライブ映像へ自動復帰 | Macの「Rokid Inbox」へ自動転送 |
-| Rokid純正「カメラ」 | カラー撮影画面へ自動で切り替わり、終了後にライブ映像へ復帰 | Rokid本体 |
-| テンプル右上の撮影ボタン | 撮影中だけライブ映像を一時停止し、撮影終了後に自動復帰 | Rokid本体 |
+| 撮影方法 | ライブ映像 | 背景なし（省電力） | 写真の保存先 |
+| --- | --- | --- | --- |
+| [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)（別アプリ） | 撮影中だけライブ映像を一時停止し、撮影後に自動復帰 | 撮影・転送中もRokid Controlを継続 | Macの「Rokid Inbox」へ自動転送 |
+| Rokid純正「カメラ」 | カラー撮影画面へ自動で切り替わり、終了後にライブ映像へ復帰 | 撮影可能。Mac側は黒い背景のまま | Rokid本体 |
+| テンプル右上の撮影ボタン | 撮影中だけライブ映像を一時停止し、撮影終了後に自動復帰 | 撮影後も背景なし画面を継続 | Rokid本体 |
 
 Photo to MacでMacへ送る、純正カメラのカラー画面を見ながら撮る、テンプルのボタンですぐ撮る、という3つの使い方を選べます。
+
+「背景なし（省電力）」では、純正カメラのカラー撮影画面をMacへ表示しません。Rokidでの撮影と本体への保存はできます。
 
 ### 背景なし（省電力）
 

@@ -31,13 +31,15 @@ private final class MockCommandSink: RokidCommandSink {
 enum KeyboardNavigationSelfTest {
     static func main() {
         testKeyboardFocusPolicy()
+        testScrcpyWindowPolicy()
         testLauncherActivityPolicy()
         testShortcutCoordinates()
         testDirectShortcuts()
         testLeftRightAndEnterRequireAppList()
         testEscapeAlwaysSendsBack()
         testSelectionSurvivesEnterAndEscape()
-        testSelectionEndsOnHomeMemoAndMouse()
+        testSelectionSurvivesFocusClick()
+        testSelectionEndsOnHomeAndMemo()
         testRecoversAfterFailedCommand()
         testGuideText()
         print("Keyboard navigation self-test passed")
@@ -71,6 +73,31 @@ enum KeyboardNavigationSelfTest {
                 modalPresented: false,
                 targetBelongsToRokidControl: false
             )
+        )
+    }
+
+    private static func testScrcpyWindowPolicy() {
+        let smallHelper = ScrcpyWindowCandidate(
+            bounds: CGRect(x: 15, y: 70, width: 220, height: 34),
+            layer: 0,
+            alpha: 1
+        )
+        let mainWindow = ScrcpyWindowCandidate(
+            bounds: CGRect(x: 86, y: 27, width: 480, height: 672),
+            layer: 0,
+            alpha: 1
+        )
+        let overlay = ScrcpyWindowCandidate(
+            bounds: CGRect(x: 0, y: 0, width: 1000, height: 1000),
+            layer: 1,
+            alpha: 1
+        )
+
+        precondition(
+            ScrcpyWindowPolicy.bestBounds(
+                from: [smallHelper, overlay, mainWindow]
+            ) == mainWindow.bounds,
+            "補助ウインドウではなくscrcpy画面本体を選べていない"
         )
     }
 
@@ -183,8 +210,9 @@ enum KeyboardNavigationSelfTest {
             ]
         )
 
-        // H・M・マウス操作で終えたあとは、もう送らない。
-        router.endSelection()
+        // H・Mで終えたあとは、もう送らない。
+        router.handle(.home)
+        _ = sink.drain()
         router.handle(.left)
         router.handle(.enter)
         precondition(sink.drain().isEmpty)
@@ -240,9 +268,26 @@ enum KeyboardNavigationSelfTest {
         )
     }
 
-    /// H・M・マウス操作でだけ、選択案内から通常案内へ戻る。
-    private static func testSelectionEndsOnHomeMemoAndMouse() {
-        for ending in ["home", "memo", "mouse"] {
+    /// Macの別アプリから戻るクリックでは、一覧と左右キーを維持する。
+    private static func testSelectionSurvivesFocusClick() {
+        let sink = MockCommandSink()
+        let router = KeyboardCommandRouter(sink: sink)
+
+        router.handle(.applications)
+        _ = sink.drain()
+        router.focusWindow()
+
+        precondition(router.isSelectingApp, "フォーカスクリックで選択状態が切れている")
+        router.handle(.right)
+        precondition(
+            sink.drain() == [.keyEvent("KEYCODE_DPAD_RIGHT")],
+            "フォーカスを戻したあとに左右キーが送られない"
+        )
+    }
+
+    /// H・Mでだけ、選択案内から通常案内へ戻る。
+    private static func testSelectionEndsOnHomeAndMemo() {
+        for ending in ["home", "memo"] {
             let sink = MockCommandSink()
             let router = KeyboardCommandRouter(sink: sink)
             var guideStates: [Bool] = []
@@ -254,10 +299,8 @@ enum KeyboardNavigationSelfTest {
             switch ending {
             case "home":
                 router.handle(.home)
-            case "memo":
-                router.handle(.memo)
             default:
-                router.endSelection()
+                router.handle(.memo)
             }
 
             precondition(

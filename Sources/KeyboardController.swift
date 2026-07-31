@@ -250,7 +250,7 @@ final class KeyboardController {
             // previously active app. Use the actual frontmost window under the
             // pointer so covered scrcpy regions do not steal focus.
             if pointTargetsScrcpyWindow(event.location) {
-                endAppSelection()
+                focusWindow()
                 DispatchQueue.main.async { [weak self] in
                     self?.onActivate?()
                 }
@@ -399,7 +399,14 @@ final class KeyboardController {
         return false
     }
 
-    /// マウス操作などでアプリ一覧の選択状態を終える。
+    /// Macの別アプリからRokid画面へ戻るクリックでは選択状態を維持する。
+    func focusWindow() {
+        actionQueue.async { [weak self] in
+            self?.router.focusWindow()
+        }
+    }
+
+    /// ライブ映像上のタップなど、Rokid側を直接操作した場合は選択を終える。
     func endAppSelection() {
         actionQueue.async { [weak self] in
             self?.router.endSelection()

@@ -1104,24 +1104,36 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         else {
             return nil
         }
-        guard let window = windows.first(where: {
+        let candidates = windows.compactMap {
+            (window: [String: Any]) -> ScrcpyWindowCandidate? in
             guard
-                let owner = $0[kCGWindowOwnerPID as String] as? NSNumber,
+                let owner = window[
+                    kCGWindowOwnerPID as String
+                ] as? NSNumber,
                 owner.int32Value == processIdentifier,
-                let layer = $0[kCGWindowLayer as String] as? NSNumber
+                let layer = window[
+                    kCGWindowLayer as String
+                ] as? NSNumber,
+                let boundsDictionary = window[
+                    kCGWindowBounds as String
+                ] as? NSDictionary,
+                let bounds = CGRect(
+                    dictionaryRepresentation:
+                        boundsDictionary as CFDictionary
+                )
             else {
-                return false
+                return nil
             }
-            return layer.intValue == 0
-        }),
-        let boundsDictionary = window[
-            kCGWindowBounds as String
-        ] as? NSDictionary else {
-            return nil
+            let alpha = (
+                window[kCGWindowAlpha as String] as? NSNumber
+            )?.doubleValue ?? 1
+            return ScrcpyWindowCandidate(
+                bounds: bounds,
+                layer: layer.intValue,
+                alpha: alpha
+            )
         }
-        return CGRect(
-            dictionaryRepresentation: boundsDictionary as CFDictionary
-        )
+        return ScrcpyWindowPolicy.bestBounds(from: candidates)
     }
 
     private static let scrcpyWindowNotifications = [
