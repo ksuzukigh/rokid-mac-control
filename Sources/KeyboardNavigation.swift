@@ -1,5 +1,38 @@
 import Foundation
 
+enum KeyboardFocusPolicy {
+    /// Rokid Control自身が前面なら、終了済みの映像受信プロセスをイベントの
+    /// 送信先としてmacOSが一時的に返しても、Rokid用キーを受け付ける。
+    static func accepts(
+        appIsActive: Bool,
+        modalPresented: Bool,
+        targetBelongsToRokidControl: Bool
+    ) -> Bool {
+        !modalPresented
+            && (appIsActive || targetBelongsToRokidControl)
+    }
+}
+
+enum LauncherActivityPolicy {
+    static let launcherPackage = "com.rokid.os.sprite.launcher"
+
+    static func isLauncherForeground(_ output: String) -> Bool {
+        output
+            .split(whereSeparator: \.isNewline)
+            .contains { line in
+                let value = line.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                let isCurrentActivity =
+                    value.contains("topResumedActivity=")
+                    || value.hasPrefix("mResumedActivity:")
+                    || value.hasPrefix("ResumedActivity:")
+                return isCurrentActivity
+                    && value.contains("\(launcherPackage)/")
+            }
+    }
+}
+
 /// Rokidホーム画面の下段アイコン。
 ///
 /// 矢印キーで移動する「選択リング」の対象ではない。`M` / `H` / `A` の

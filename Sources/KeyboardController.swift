@@ -65,7 +65,7 @@ private final class ADBCommandSink: RokidCommandSink {
         _ = connection.runADB([
             "-s", serial, "shell", "input", "keyevent", "KEYCODE_HOME",
         ])
-        Thread.sleep(forTimeInterval: 0.35)
+        waitForLauncher(serial: serial)
         let point = shortcut.devicePoint(
             forScreenWidth: size.0,
             height: size.1
@@ -75,6 +75,31 @@ private final class ADBCommandSink: RokidCommandSink {
             "\(Int(point.x))", "\(Int(point.y))",
         ])
         logger.log("下段を開く \(shortcut.title)")
+    }
+
+    private func waitForLauncher(serial: String) {
+        for attempt in 1...8 {
+            let result = connection.runADB([
+                "-s", serial, "shell", "dumpsys", "activity", "activities",
+            ], timeout: 2)
+            if result.succeeded,
+               LauncherActivityPolicy.isLauncherForeground(result.output) {
+                // Activityが前面になった直後の切替アニメーションがタップを
+                // 取りこぼさないよう、短い安定待ちを置く。
+                Thread.sleep(forTimeInterval: 0.2)
+                if attempt > 1 {
+                    logger.log(
+                        "ホーム画面準備を待ってショートカット実行 attempt=\(attempt)"
+                    )
+                }
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        // 状態を読めなくても従来どおり操作は試す。接続の一時的な遅延で
+        // M/H/Aが完全に使えなくなることを避ける。
+        Thread.sleep(forTimeInterval: 0.25)
+        logger.log("ホーム画面準備を確認できないままショートカット実行")
     }
 }
 
@@ -300,20 +325,34 @@ final class KeyboardController {
         targetPIDLock.lock()
         let currentScrcpyPID = scrcpyProcessIdentifier
         targetPIDLock.unlock()
+        let modalPresented = isAppModalPresented()
+
+        // カメラ受信の切替直後は、終了済みの受信プロセスIDがイベントへ
+        // 一時的に残ることがある。Rokid Control自身が前面なら受け付ける。
+        if KeyboardFocusPolicy.accepts(
+            appIsActive: NSApp.isActive,
+            modalPresented: modalPresented,
+            targetBelongsToRokidControl: false
+        ) {
+            return true
+        }
 
         // An LSUIElement helper may deliver keystrokes to either its own PID or
         // the regular parent app. Both belong to Rokid Control, while another
         // foreground app retains its own PID and is left untouched.
-        if pid == currentScrcpyPID {
-            return true
+        var targetBelongsToRokidControl =
+            pid == currentScrcpyPID
+            || pid == ProcessInfo.processInfo.processIdentifier
+        if !targetBelongsToRokidControl,
+           let application = NSRunningApplication(processIdentifier: pid) {
+            targetBelongsToRokidControl =
+                application.bundleURL?.standardizedFileURL == scrcpyAppURL
         }
-        if pid == ProcessInfo.processInfo.processIdentifier {
-            return !isAppModalPresented()
-        }
-        guard let application = NSRunningApplication(processIdentifier: pid) else {
-            return false
-        }
-        return application.bundleURL?.standardizedFileURL == scrcpyAppURL
+        return KeyboardFocusPolicy.accepts(
+            appIsActive: false,
+            modalPresented: modalPresented,
+            targetBelongsToRokidControl: targetBelongsToRokidControl
+        )
     }
 
     private func pointTargetsScrcpyWindow(_ point: CGPoint) -> Bool {

@@ -9,6 +9,12 @@ enum VisionFrameKind {
     case hud
 }
 
+enum VisionCompositionMode {
+    case cameraWithHUD
+    /// 純正カメラのプレビューを含むRokid画面を、そのままカラー表示する。
+    case deviceScreen
+}
+
 enum VisionCaptureError: LocalizedError {
     case sourceWindowNotFound(String)
     case streamSetup(String)
@@ -28,6 +34,7 @@ final class VisionFrameCompositor {
     private let renderQueue = DispatchQueue(label: "RokidVision.Compositor")
     private let context = CIContext(options: [.cacheIntermediates: false])
     let outputSize: CGSize
+    private let mode: VisionCompositionMode
     private var hudVisibility: CGFloat
     private var latestCamera: CVPixelBuffer?
     private var latestHUD: CVPixelBuffer?
@@ -37,12 +44,14 @@ final class VisionFrameCompositor {
 
     init(
         outputSize: CGSize = CGSize(width: 480, height: 640),
-        hudVisibility: Double = 0.55
+        hudVisibility: Double = 0.55,
+        mode: VisionCompositionMode = .cameraWithHUD
     ) {
         self.outputSize = CGSize(
             width: max(outputSize.width.rounded(), 1),
             height: max(outputSize.height.rounded(), 1)
         )
+        self.mode = mode
         self.hudVisibility = CGFloat(min(max(hudVisibility, 0), 1))
     }
 
@@ -81,15 +90,22 @@ final class VisionFrameCompositor {
         renderPending = false
         lock.unlock()
 
-        guard let cameraBuffer, let hudBuffer else { return }
-
-        guard let image = compose(
-            cameraImage: CIImage(cvPixelBuffer: cameraBuffer),
-            hudImage: CIImage(cvPixelBuffer: hudBuffer),
-            hudVisibility: visibility
-        ) else {
-            return
+        let image: CGImage?
+        switch mode {
+        case .cameraWithHUD:
+            guard let cameraBuffer, let hudBuffer else { return }
+            image = compose(
+                cameraImage: CIImage(cvPixelBuffer: cameraBuffer),
+                hudImage: CIImage(cvPixelBuffer: hudBuffer),
+                hudVisibility: visibility
+            )
+        case .deviceScreen:
+            guard let hudBuffer else { return }
+            image = renderDeviceScreen(
+                CIImage(cvPixelBuffer: hudBuffer)
+            )
         }
+        guard let image else { return }
         DispatchQueue.main.async { [weak self] in
             self?.onFrame?(image)
         }
@@ -137,6 +153,12 @@ final class VisionFrameCompositor {
             )
             .cropped(to: target)
         return context.createCGImage(composed, from: target)
+    }
+
+    func renderDeviceScreen(_ image: CIImage) -> CGImage? {
+        let target = CGRect(origin: .zero, size: outputSize)
+        let fitted = aspectFill(image, into: target).cropped(to: target)
+        return context.createCGImage(fitted, from: target)
     }
 
     private func aspectFill(_ image: CIImage, into target: CGRect) -> CIImage {
@@ -208,7 +230,7 @@ final class VisionCaptureCoordinator {
 
     func start(
         hudPID: pid_t,
-        cameraPID: pid_t,
+        cameraPID: pid_t? = nil,
         completion: @escaping (Error?) -> Void
     ) {
         SCShareableContent.getExcludingDesktopWindows(
@@ -232,22 +254,25 @@ final class VisionCaptureCoordinator {
                 ) else {
                     throw VisionCaptureError.sourceWindowNotFound("HUD")
                 }
-                guard let cameraWindow = self.bestWindow(
-                    for: cameraPID,
-                    in: content
-                ) else {
-                    throw VisionCaptureError.sourceWindowNotFound("カメラ")
-                }
-
                 let hudStream = try self.makeStream(
                     window: hudWindow,
                     kind: .hud
                 )
-                let cameraStream = try self.makeStream(
-                    window: cameraWindow,
-                    kind: .camera
-                )
-                self.streams = [hudStream, cameraStream]
+                if let cameraPID {
+                    guard let cameraWindow = self.bestWindow(
+                        for: cameraPID,
+                        in: content
+                    ) else {
+                        throw VisionCaptureError.sourceWindowNotFound("カメラ")
+                    }
+                    let cameraStream = try self.makeStream(
+                        window: cameraWindow,
+                        kind: .camera
+                    )
+                    self.streams = [hudStream, cameraStream]
+                } else {
+                    self.streams = [hudStream]
+                }
 
                 let group = DispatchGroup()
                 let startErrorLock = NSLock()
