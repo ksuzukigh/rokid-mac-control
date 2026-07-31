@@ -36,11 +36,36 @@ RokidのHUD（文字・アイコン）は緑1色ですが、純正「カメラ�
 
 [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)は、Rokidで見ている景色を撮影し、その写真を同じWi-Fi上のMacへ直接送る別アプリです。写真はMacの「ピクチャ」にある「Rokid Inbox」フォルダへ自動で入り、スマートフォンやクラウドサービスは使いません。最初に一度だけ、RokidとMacへのセットアップが必要です。
 
-| 撮影方法 | ライブ映像 | 背景なし（省電力） | 写真の保存先 |
-| --- | --- | --- | --- |
-| [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)（別アプリ） | 撮影中だけライブ映像を一時停止し、撮影後に自動復帰 | 撮影・転送中もRokid Controlを継続 | Macの「Rokid Inbox」へ自動転送 |
-| Rokid純正「カメラ」 | フルカラーの撮影画面へ自動で切り替わり、終了後にライブ映像へ復帰 | フルカラーの撮影画面へ自動で切り替わり、終了後に背景なし画面へ復帰 | Rokid本体 |
-| テンプル右上の撮影ボタン | 撮影中だけライブ映像を一時停止し、撮影終了後に自動復帰 | 撮影後も背景なし画面を継続 | Rokid本体 |
+<table>
+  <thead>
+    <tr>
+      <th width="22%">撮影方法</th>
+      <th width="29%">ライブ映像</th>
+      <th width="29%">背景なし（省電力）</th>
+      <th width="20%">写真の保存先</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="https://github.com/ksuzukigh/rokid-photo-to-mac">Photo to Mac</a>（別アプリ）</td>
+      <td>撮影中だけライブ映像を一時停止し、撮影後に自動復帰</td>
+      <td>撮影・転送中もRokid Controlを継続</td>
+      <td>Macの「Rokid Inbox」へ自動転送</td>
+    </tr>
+    <tr>
+      <td>Rokid純正「カメラ」</td>
+      <td>フルカラーの撮影画面へ自動で切り替わり、終了後にライブ映像へ復帰</td>
+      <td>フルカラーの撮影画面へ自動で切り替わり、終了後に背景なし画面へ復帰</td>
+      <td>Rokid本体</td>
+    </tr>
+    <tr>
+      <td>テンプル右上の撮影ボタン</td>
+      <td>撮影中だけライブ映像を一時停止し、撮影終了後に自動復帰</td>
+      <td>撮影後も背景なし画面を継続</td>
+      <td>Rokid本体</td>
+    </tr>
+  </tbody>
+</table>
 
 Photo to MacでMacへ送る、純正カメラのカラー画面を見ながら撮る、テンプルのボタンですぐ撮る、という3つの使い方を選べます。
 
