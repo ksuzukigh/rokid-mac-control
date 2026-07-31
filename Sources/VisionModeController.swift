@@ -18,6 +18,9 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     private let onFailure: (String, String) -> Void
     private let onSourceStopped: () -> Void
     private let inputQueue = DispatchQueue(label: "RokidControl.VisionInput")
+    private let cameraStateQueue = DispatchQueue(
+        label: "RokidControl.CameraState"
+    )
 
     private var hudApplication: NSRunningApplication?
     private var cameraApplication: NSRunningApplication?
@@ -29,6 +32,10 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     private var captureRecoveryAttempts = 0
     private var cameraRecoveryScheduled = false
     private var cameraRecoveryAttempts = 0
+    private var isShowingOriginalCameraScreen = false
+    private var originalCameraStateCheckScheduled = false
+    private var originalCameraCaptureAttempts = 0
+    private var originalCameraCaptureRecoveryScheduled = false
     private var hudVisibility: Double
     private var sourceRestartRequested = false
     private var isStopping = false
@@ -533,11 +540,6 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             }
 
             self.cameraRecoveryScheduled = true
-            self.cameraRecoveryAttempts += 1
-            self.logger.log(
-                "視界表示 カメラ再受信待機 attempt=\(self.cameraRecoveryAttempts) reason=\(error.localizedDescription)"
-            )
-
             self.captureRecoveryScheduled = false
             self.capture?.onFailure = nil
             self.capture?.stop()
@@ -547,22 +549,250 @@ final class VisionModeController: NSObject, NSWindowDelegate {
                 "撮影中です…\nカメラ映像の復帰を待っています"
             )
 
-            guard self.cameraRecoveryAttempts <= 15 else {
-                self.fail(
-                    title: "カメラ映像を復旧できませんでした",
-                    message: "カメラを使用しているアプリを終了してから、もう一度お試しください。"
+            self.readOriginalCameraForeground { [weak self] isForeground in
+                guard let self, !self.isStopping else { return }
+                self.cameraRecoveryScheduled = false
+                if isForeground {
+                    self.showOriginalCameraScreen(
+                        hudApplication: hudApplication
+                    )
+                    return
+                }
+
+                self.cameraRecoveryAttempts += 1
+                self.logger.log(
+                    "視界表示 カメラ再受信待機 attempt=\(self.cameraRecoveryAttempts) reason=\(error.localizedDescription)"
+                )
+
+                guard self.cameraRecoveryAttempts <= 15 else {
+                    self.fail(
+                        title: "カメラ映像を復旧できませんでした",
+                        message: "カメラを使用しているアプリを終了してから、もう一度お試しください。"
+                    )
+                    return
+                }
+
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now() + 2.0
+                ) { [weak self] in
+                    guard let self, !self.isStopping else { return }
+                    self.launchCameraSource(
+                        hudApplication: hudApplication,
+                        isRecovery: true
+                    )
+                }
+            }
+        }
+    }
+
+    private func readOriginalCameraForeground(
+        completion: @escaping (Bool) -> Void
+    ) {
+        cameraStateQueue.async { [weak self] in
+            guard let self, !self.isStopping else { return }
+            let serial = self.connection.currentSerial()
+            let result = self.connection.runADB([
+                "-s", serial, "shell", "dumpsys", "activity", "activities",
+            ], timeout: 3)
+            let isForeground = result.succeeded
+                && CameraAppPolicy.isOriginalCameraForeground(result.output)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isStopping else { return }
+                completion(isForeground)
+            }
+        }
+    }
+
+    /// 純正カメラは背面カメラを専有するが、HUD用の画面転送にはカラーの
+    /// プレビューが含まれる。カメラ受信を止め、Rokid画面をそのまま表示する。
+    private func showOriginalCameraScreen(
+        hudApplication: NSRunningApplication
+    ) {
+        guard !isStopping else { return }
+        guard !isShowingOriginalCameraScreen else {
+            scheduleOriginalCameraStateCheck()
+            return
+        }
+
+        isShowingOriginalCameraScreen = true
+        originalCameraCaptureAttempts = 0
+        cameraRecoveryAttempts = 0
+        if let application = cameraApplication, !application.isTerminated {
+            application.terminate()
+        }
+        cameraApplication = nil
+        window?.title = "Rokid AI Glasses RV101（純正カメラ）"
+        displayView?.showStatus("純正カメラへ切り替えています…")
+        startOriginalCameraScreenCapture(
+            hudApplication: hudApplication
+        )
+    }
+
+    private func startOriginalCameraScreenCapture(
+        hudApplication: NSRunningApplication
+    ) {
+        guard !isStopping, isShowingOriginalCameraScreen else { return }
+        guard !hudApplication.isTerminated else {
+            requestSourceRestart(
+                reason: "Rokidとの画面接続が終了しました。"
+            )
+            return
+        }
+
+        capture?.onFailure = nil
+        capture?.stop()
+        capture = nil
+        compositor = nil
+
+        let compositor = VisionFrameCompositor(
+            outputSize: deviceSize,
+            hudVisibility: hudVisibility,
+            mode: .deviceScreen
+        )
+        compositor.onFrame = { [weak self] frame in
+            self?.displayView?.show(frame)
+        }
+        let capture = VisionCaptureCoordinator(compositor: compositor)
+        capture.onFailure = { [weak self] error in
+            self?.recoverOriginalCameraScreen(
+                hudApplication: hudApplication,
+                error: error
+            )
+        }
+        self.compositor = compositor
+        self.capture = capture
+        capture.start(
+            hudPID: hudApplication.processIdentifier
+        ) { [weak self] error in
+            guard let self, !self.isStopping,
+                  self.isShowingOriginalCameraScreen
+            else {
+                return
+            }
+            if let error {
+                self.recoverOriginalCameraScreen(
+                    hudApplication: hudApplication,
+                    error: error
                 )
                 return
             }
+            self.originalCameraCaptureRecoveryScheduled = false
+            self.originalCameraCaptureAttempts = 0
+            self.logger.log("視界表示 純正カメラ画面へ切替")
+            self.scheduleSourceWindowHiding()
+            self.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            self.scheduleOriginalCameraStateCheck()
+        }
+    }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                guard let self, !self.isStopping else { return }
-                self.cameraRecoveryScheduled = false
-                self.launchCameraSource(
-                    hudApplication: hudApplication,
-                    isRecovery: true
+    private func recoverOriginalCameraScreen(
+        hudApplication: NSRunningApplication,
+        error: Error
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isStopping,
+                  self.isShowingOriginalCameraScreen,
+                  !self.originalCameraCaptureRecoveryScheduled
+            else {
+                return
+            }
+            self.originalCameraCaptureRecoveryScheduled = true
+            self.originalCameraCaptureAttempts += 1
+            self.logger.log(
+                "視界表示 純正カメラ画面再接続 attempt=\(self.originalCameraCaptureAttempts) reason=\(error.localizedDescription)"
+            )
+            self.capture?.onFailure = nil
+            self.capture?.stop()
+            self.capture = nil
+            self.compositor = nil
+            self.displayView?.showStatus(
+                "純正カメラ画面を再接続しています…"
+            )
+
+            guard self.originalCameraCaptureAttempts <= 5 else {
+                self.requestSourceRestart(
+                    reason: "純正カメラ画面の受信が停止しました。"
+                )
+                return
+            }
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + 1.0
+            ) { [weak self] in
+                guard let self, !self.isStopping,
+                      self.isShowingOriginalCameraScreen
+                else {
+                    return
+                }
+                self.originalCameraCaptureRecoveryScheduled = false
+                self.startOriginalCameraScreenCapture(
+                    hudApplication: hudApplication
                 )
             }
+        }
+    }
+
+    private func scheduleOriginalCameraStateCheck() {
+        guard !isStopping, isShowingOriginalCameraScreen,
+              !originalCameraStateCheckScheduled
+        else {
+            return
+        }
+        originalCameraStateCheckScheduled = true
+        cameraStateQueue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self, !self.isStopping else { return }
+            let serial = self.connection.currentSerial()
+            let result = self.connection.runADB([
+                "-s", serial, "shell", "dumpsys", "activity", "activities",
+            ], timeout: 3)
+            let isForeground = result.succeeded
+                && CameraAppPolicy.isOriginalCameraForeground(result.output)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isStopping else { return }
+                self.originalCameraStateCheckScheduled = false
+                // 読み取り失敗時はカメラを横取りせず、次の確認を待つ。
+                guard result.succeeded else {
+                    self.scheduleOriginalCameraStateCheck()
+                    return
+                }
+                if isForeground {
+                    self.scheduleOriginalCameraStateCheck()
+                } else {
+                    self.restoreLiveCameraBackground()
+                }
+            }
+        }
+    }
+
+    private func restoreLiveCameraBackground() {
+        guard !isStopping, isShowingOriginalCameraScreen else { return }
+        isShowingOriginalCameraScreen = false
+        originalCameraCaptureAttempts = 0
+        originalCameraCaptureRecoveryScheduled = false
+        capture?.onFailure = nil
+        capture?.stop()
+        capture = nil
+        compositor = nil
+        window?.title = "Rokid AI Glasses RV101（ライブ映像）"
+        displayView?.showStatus("ライブ映像へ戻しています…")
+        logger.log("視界表示 純正カメラ終了を検出")
+
+        guard let hudApplication, !hudApplication.isTerminated else {
+            requestSourceRestart(
+                reason: "Rokidとの画面接続が終了しました。"
+            )
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, !self.isStopping,
+                  !self.isShowingOriginalCameraScreen
+            else {
+                return
+            }
+            self.launchCameraSource(
+                hudApplication: hudApplication,
+                isRecovery: true
+            )
         }
     }
 

@@ -37,6 +37,20 @@ enum VisionCompositorSelfTest {
             expectedSize: CGSize(width: 320, height: 240)
         )
 
+        let deviceScreenCompositor = VisionFrameCompositor(
+            outputSize: CGSize(width: 480, height: 640),
+            mode: .deviceScreen
+        )
+        guard let deviceScreen = deviceScreenCompositor.renderDeviceScreen(
+            CIImage(cgImage: camera)
+        ) else {
+            throw TestError.composition
+        }
+        try verifyColorDeviceScreen(
+            deviceScreen,
+            expectedSize: CGSize(width: 480, height: 640)
+        )
+
         let output = URL(
             fileURLWithPath: CommandLine.arguments.dropFirst().first
                 ?? "vision-compositor-self-test.png"
@@ -50,6 +64,60 @@ enum VisionCompositorSelfTest {
         }
         try data.write(to: output, options: .atomic)
         print(output.path)
+    }
+
+    private static func verifyColorDeviceScreen(
+        _ image: CGImage,
+        expectedSize: CGSize
+    ) throws {
+        guard image.width == Int(expectedSize.width),
+              image.height == Int(expectedSize.height)
+        else {
+            throw TestError.unexpectedSize(image.width, image.height)
+        }
+
+        let bytesPerPixel = 4
+        let rowBytes = image.width * bytesPerPixel
+        var pixels = [UInt8](
+            repeating: 0,
+            count: rowBytes * image.height
+        )
+        let context = CIContext(options: [.cacheIntermediates: false])
+        pixels.withUnsafeMutableBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            context.render(
+                CIImage(cgImage: image),
+                toBitmap: baseAddress,
+                rowBytes: rowBytes,
+                bounds: CGRect(
+                    x: 0,
+                    y: 0,
+                    width: image.width,
+                    height: image.height
+                ),
+                format: .RGBA8,
+                colorSpace: CGColorSpaceCreateDeviceRGB()
+            )
+        }
+
+        var colorfulPixels = 0
+        for index in stride(
+            from: 0,
+            to: pixels.count,
+            by: bytesPerPixel
+        ) {
+            let channels = [
+                Int(pixels[index]),
+                Int(pixels[index + 1]),
+                Int(pixels[index + 2]),
+            ]
+            if channels.max()! - channels.min()! >= 24 {
+                colorfulPixels += 1
+            }
+        }
+        guard colorfulPixels > image.width * image.height / 3 else {
+            throw TestError.deviceScreenLostColor(colorfulPixels)
+        }
     }
 
     private static func verify(
@@ -193,5 +261,6 @@ enum VisionCompositorSelfTest {
         case unexpectedSize(Int, Int)
         case outputTooDark(Int)
         case hudMissing(Int)
+        case deviceScreenLostColor(Int)
     }
 }

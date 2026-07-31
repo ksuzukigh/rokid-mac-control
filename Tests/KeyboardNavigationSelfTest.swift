@@ -30,6 +30,8 @@ private final class MockCommandSink: RokidCommandSink {
 @main
 enum KeyboardNavigationSelfTest {
     static func main() {
+        testKeyboardFocusPolicy()
+        testLauncherActivityPolicy()
         testShortcutCoordinates()
         testDirectShortcuts()
         testLeftRightAndEnterRequireAppList()
@@ -39,6 +41,59 @@ enum KeyboardNavigationSelfTest {
         testRecoversAfterFailedCommand()
         testGuideText()
         print("Keyboard navigation self-test passed")
+    }
+
+    private static func testKeyboardFocusPolicy() {
+        precondition(
+            KeyboardFocusPolicy.accepts(
+                appIsActive: true,
+                modalPresented: false,
+                targetBelongsToRokidControl: false
+            )
+        )
+        precondition(
+            KeyboardFocusPolicy.accepts(
+                appIsActive: false,
+                modalPresented: false,
+                targetBelongsToRokidControl: true
+            )
+        )
+        precondition(
+            !KeyboardFocusPolicy.accepts(
+                appIsActive: true,
+                modalPresented: true,
+                targetBelongsToRokidControl: true
+            )
+        )
+        precondition(
+            !KeyboardFocusPolicy.accepts(
+                appIsActive: false,
+                modalPresented: false,
+                targetBelongsToRokidControl: false
+            )
+        )
+    }
+
+    private static func testLauncherActivityPolicy() {
+        precondition(
+            LauncherActivityPolicy.isLauncherForeground(
+                """
+                topResumedActivity=ActivityRecord{123 u0 \
+                com.rokid.os.sprite.launcher/.main.SpriteMainActivity t42}
+                """
+            )
+        )
+        precondition(
+            !LauncherActivityPolicy.isLauncherForeground(
+                """
+                topResumedActivity=ActivityRecord{123 u0 \
+                com.rokid.os.sprite.assistserver/\
+                com.rokid.os.sprite.assist.media.page.CameraActivity t42}
+                Hist #1: ActivityRecord{456 u0 \
+                com.rokid.os.sprite.launcher/.main.SpriteMainActivity t41}
+                """
+            )
+        )
     }
 
     // MARK: - 座標
