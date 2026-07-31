@@ -61,6 +61,7 @@ xcrun swiftc \
     -o "$NAVIGATION_TEST_BINARY" \
     "$ROOT/Sources/KeyboardNavigation.swift" \
     "$ROOT/Sources/KeyboardCommandRouter.swift" \
+    "$ROOT/Sources/ScrcpyWindowPolicy.swift" \
     "$ROOT/Tests/KeyboardNavigationSelfTest.swift"
 
 "$NAVIGATION_TEST_BINARY"

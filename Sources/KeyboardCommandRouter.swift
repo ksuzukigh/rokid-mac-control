@@ -93,7 +93,16 @@ final class KeyboardCommandRouter {
         }
     }
 
-    /// マウス操作など、キー以外の理由で選択状態を終える。
+    /// Rokid画面へフォーカスを戻すクリックでは選択状態を変えない。
+    ///
+    /// Macの別アプリから戻るためのクリックと、Rokid画面を操作するクリックは
+    /// macOSのイベントだけでは確実に区別できない。ここで選択を終えると、
+    /// Rokid側はアプリ一覧のままなのに左右キーだけ無効になるため維持する。
+    func focusWindow() {
+        // 意図的に何もしない。方針を自動試験から確認できるようメソッドにする。
+    }
+
+    /// Rokid側の画面を直接操作した場合は、アプリ一覧の選択を終える。
     func endSelection() {
         let wasSelecting = selection.isActive
         selection.end()

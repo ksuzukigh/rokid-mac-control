@@ -71,8 +71,9 @@ enum LauncherShortcut: Int, CaseIterable {
 ///
 /// 当初は8秒で自動的に切る設計だったが、実機で試すと、アプリを開いて`Esc`で
 /// 一覧へ戻ったときに矢印が死んでしまい使いものにならなかった。そのため
-/// 時間切れと`Enter`・`Esc`による終了はやめ、`H`・`M`・マウス操作という
-/// 「別のことを始めた」と分かる操作でだけ終える。
+/// 時間切れと`Enter`・`Esc`による終了はやめ、`H`・`M`という
+/// 「別の場所を開いた」と分かる操作でだけ終える。Macの別アプリから戻るため
+/// Rokid画面をクリックしても、Rokid側の一覧は閉じないため選択を維持する。
 struct AppSelectionState {
     private(set) var isActive = false
 
