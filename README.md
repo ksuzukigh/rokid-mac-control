@@ -1,4 +1,4 @@
-# Rokid Control
+# Rokid Control for Mac
 
 Rokid AI Glasses RV101の画面をMacに表示し、Macのマウスとキーボードで操作するアプリです。
 
