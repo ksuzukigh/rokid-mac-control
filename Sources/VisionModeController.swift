@@ -160,6 +160,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             self?.keyboard.endAppSelection()
             self?.sendKey("KEYCODE_BACK")
         }
+
         window.contentView = displayView
         navigationGuideLabel = addWindowControls(to: window)
         window.makeKeyAndOrderFront(nil)
@@ -171,7 +172,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     private func addWindowControls(to window: NSWindow) -> NSTextField {
         let accessory = NSTitlebarAccessoryViewController()
         accessory.layoutAttribute = .bottom
-        let controlPanelHeight: CGFloat = 66
+        let controlPanelHeight: CGFloat = 34
 
         let background = NSVisualEffectView(
             frame: NSRect(
@@ -185,8 +186,8 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         background.blendingMode = .withinWindow
         background.state = .active
 
-        let title = NSTextField(labelWithString: "文字・アイコンの見やすさ")
-        title.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        let title = NSTextField(labelWithString: "見やすさ")
+        title.font = NSFont.systemFont(ofSize: 11, weight: .medium)
         let light = NSTextField(labelWithString: "薄い")
         light.font = NSFont.systemFont(ofSize: 11)
         light.textColor = .secondaryLabelColor
@@ -205,22 +206,28 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         // 左右キーはRokidの操作へ回すため、このスライダーはマウス操作だけにする。
         slider.refusesFirstResponder = true
         slider.toolTip = "文字とアイコンの明るさ・太さを調整します（マウスで動かします）"
-        slider.widthAnchor.constraint(equalToConstant: 185).isActive = true
+        slider.widthAnchor.constraint(equalToConstant: 105).isActive = true
 
-        let stack = NSStackView(views: [title, light, slider, strong])
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 8
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        background.addSubview(stack)
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        separator.heightAnchor.constraint(equalToConstant: 18).isActive = true
 
         let guide = NSTextField(labelWithString: NavigationGuide.standard)
-        guide.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        guide.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
         guide.textColor = .labelColor
         guide.alignment = .center
         guide.lineBreakMode = .byTruncatingTail
-        guide.translatesAutoresizingMaskIntoConstraints = false
-        background.addSubview(guide)
+        guide.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let stack = NSStackView(
+            views: [title, light, slider, strong, separator, guide]
+        )
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(stack)
 
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(
@@ -231,17 +238,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
                 equalTo: background.trailingAnchor,
                 constant: -12
             ),
-            stack.topAnchor.constraint(equalTo: background.topAnchor, constant: 4),
-            guide.leadingAnchor.constraint(
-                equalTo: background.leadingAnchor,
-                constant: 10
-            ),
-            guide.trailingAnchor.constraint(
-                equalTo: background.trailingAnchor,
-                constant: -10
-            ),
-            guide.topAnchor.constraint(equalTo: stack.bottomAnchor, constant: 3),
-            guide.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -4),
+            stack.centerYAnchor.constraint(equalTo: background.centerYAnchor),
         ])
 
         accessory.view = background
