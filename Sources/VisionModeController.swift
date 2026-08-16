@@ -171,9 +171,15 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     private func addWindowControls(to window: NSWindow) -> NSTextField {
         let accessory = NSTitlebarAccessoryViewController()
         accessory.layoutAttribute = .bottom
+        let controlPanelHeight: CGFloat = 66
 
         let background = NSVisualEffectView(
-            frame: NSRect(x: 0, y: 0, width: 480, height: 62)
+            frame: NSRect(
+                x: 0,
+                y: 0,
+                width: 480,
+                height: controlPanelHeight
+            )
         )
         background.material = .titlebar
         background.blendingMode = .withinWindow
@@ -239,6 +245,13 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         ])
 
         accessory.view = background
+        accessory.preferredContentSize = NSSize(
+            width: 480,
+            height: controlPanelHeight
+        )
+        background.heightAnchor.constraint(
+            equalToConstant: controlPanelHeight
+        ).isActive = true
         window.addTitlebarAccessoryViewController(accessory)
         return guide
     }
