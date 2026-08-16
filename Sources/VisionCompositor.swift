@@ -369,7 +369,6 @@ final class VisionDisplayView: NSView {
     private let deviceSize: CGSize
     private var image: CGImage?
     private var status = "Rokidへ接続しています…"
-    private var guideText = NavigationGuide.standard
     var onTap: ((Int, Int) -> Void)?
     var onBack: (() -> Void)?
 
@@ -404,7 +403,6 @@ final class VisionDisplayView: NSView {
                 operation: .copy,
                 fraction: 1
             )
-            drawNavigationGuide()
             return
         }
 
@@ -438,46 +436,6 @@ final class VisionDisplayView: NSView {
         status = text
         image = nil
         needsDisplay = true
-    }
-
-    /// 操作案内はMac側の合成映像にだけ描く。Rokid本体のHUDには重ねない。
-    func setAppSelection(_ isSelectingApp: Bool) {
-        let text = NavigationGuide.text(isSelectingApp: isSelectingApp)
-        guard text != guideText else { return }
-        guideText = text
-        needsDisplay = true
-    }
-
-    private func drawNavigationGuide() {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
-            .foregroundColor: NSColor.white,
-            .paragraphStyle: paragraph,
-        ]
-        let text = guideText as NSString
-        let textSize = text.size(withAttributes: attributes)
-        let panelHeight = textSize.height + 12
-        let panelWidth = min(textSize.width + 28, bounds.width - 20)
-        let panel = NSRect(
-            x: bounds.midX - panelWidth / 2,
-            y: bounds.maxY - panelHeight - 10,
-            width: panelWidth,
-            height: panelHeight
-        )
-        NSColor.black.withAlphaComponent(0.72).setFill()
-        NSBezierPath(roundedRect: panel, xRadius: 8, yRadius: 8).fill()
-
-        text.draw(
-            in: NSRect(
-                x: panel.minX,
-                y: panel.midY - textSize.height / 2,
-                width: panel.width,
-                height: textSize.height
-            ),
-            withAttributes: attributes
-        )
     }
 
     override func mouseDown(with event: NSEvent) {

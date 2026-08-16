@@ -26,6 +26,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     private var cameraApplication: NSRunningApplication?
     private var window: NSWindow?
     private var displayView: VisionDisplayView?
+    private weak var navigationGuideLabel: NSTextField?
     private var compositor: VisionFrameCompositor?
     private var capture: VisionCaptureCoordinator?
     private var captureRecoveryScheduled = false
@@ -114,6 +115,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         window?.orderOut(nil)
         window = nil
         displayView = nil
+        navigationGuideLabel = nil
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -122,7 +124,9 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     }
 
     func setAppSelection(_ isSelectingApp: Bool) {
-        displayView?.setAppSelection(isSelectingApp)
+        navigationGuideLabel?.stringValue = NavigationGuide.text(
+            isSelectingApp: isSelectingApp
+        )
     }
 
     private func createVisionWindow() {
@@ -157,19 +161,19 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             self?.sendKey("KEYCODE_BACK")
         }
         window.contentView = displayView
-        addVisibilityControl(to: window)
+        navigationGuideLabel = addWindowControls(to: window)
         window.makeKeyAndOrderFront(nil)
 
         self.window = window
         self.displayView = displayView
     }
 
-    private func addVisibilityControl(to window: NSWindow) {
+    private func addWindowControls(to window: NSWindow) -> NSTextField {
         let accessory = NSTitlebarAccessoryViewController()
         accessory.layoutAttribute = .bottom
 
         let background = NSVisualEffectView(
-            frame: NSRect(x: 0, y: 0, width: 480, height: 34)
+            frame: NSRect(x: 0, y: 0, width: 480, height: 62)
         )
         background.material = .titlebar
         background.blendingMode = .withinWindow
@@ -203,6 +207,15 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(stack)
+
+        let guide = NSTextField(labelWithString: NavigationGuide.standard)
+        guide.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        guide.textColor = .labelColor
+        guide.alignment = .center
+        guide.lineBreakMode = .byTruncatingTail
+        guide.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(guide)
+
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(
                 equalTo: background.leadingAnchor,
@@ -212,11 +225,22 @@ final class VisionModeController: NSObject, NSWindowDelegate {
                 equalTo: background.trailingAnchor,
                 constant: -12
             ),
-            stack.centerYAnchor.constraint(equalTo: background.centerYAnchor),
+            stack.topAnchor.constraint(equalTo: background.topAnchor, constant: 4),
+            guide.leadingAnchor.constraint(
+                equalTo: background.leadingAnchor,
+                constant: 10
+            ),
+            guide.trailingAnchor.constraint(
+                equalTo: background.trailingAnchor,
+                constant: -10
+            ),
+            guide.topAnchor.constraint(equalTo: stack.bottomAnchor, constant: 3),
+            guide.bottomAnchor.constraint(equalTo: background.bottomAnchor, constant: -4),
         ])
 
         accessory.view = background
         window.addTitlebarAccessoryViewController(accessory)
+        return guide
     }
 
     @objc private func visibilityChanged(_ sender: NSSlider) {

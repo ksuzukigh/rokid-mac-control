@@ -50,6 +50,7 @@ enum VisionCompositorSelfTest {
             deviceScreen,
             expectedSize: CGSize(width: 480, height: 640)
         )
+        try verifyDisplayViewDoesNotCoverImage(size: size)
 
         let output = URL(
             fileURLWithPath: CommandLine.arguments.dropFirst().first
@@ -64,6 +65,54 @@ enum VisionCompositorSelfTest {
         }
         try data.write(to: output, options: .atomic)
         print(output.path)
+    }
+
+    private static func verifyDisplayViewDoesNotCoverImage(
+        size: NSSize
+    ) throws {
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        image.unlockFocus()
+        var rect = NSRect(origin: .zero, size: size)
+        guard let source = image.cgImage(
+            forProposedRect: &rect,
+            context: nil,
+            hints: nil
+        ) else {
+            throw TestError.imageCreation
+        }
+
+        let view = VisionDisplayView(
+            frame: NSRect(origin: .zero, size: size),
+            deviceSize: size
+        )
+        view.show(source)
+        guard let representation = view.bitmapImageRepForCachingDisplay(
+            in: view.bounds
+        ) else {
+            throw TestError.imageCreation
+        }
+        view.cacheDisplay(in: view.bounds, to: representation)
+
+        var coveredPixels = 0
+        for y in 0..<representation.pixelsHigh {
+            for x in 0..<representation.pixelsWide {
+                guard let color = representation.colorAt(x: x, y: y) else {
+                    continue
+                }
+                if color.redComponent < 0.85
+                    || color.greenComponent < 0.85
+                    || color.blueComponent < 0.85
+                {
+                    coveredPixels += 1
+                }
+            }
+        }
+        guard coveredPixels < 10 else {
+            throw TestError.imageCoveredByGuide(coveredPixels)
+        }
     }
 
     private static func verifyColorDeviceScreen(
@@ -262,5 +311,6 @@ enum VisionCompositorSelfTest {
         case outputTooDark(Int)
         case hudMissing(Int)
         case deviceScreenLostColor(Int)
+        case imageCoveredByGuide(Int)
     }
 }
