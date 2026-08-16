@@ -206,7 +206,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         // 左右キーはRokidの操作へ回すため、このスライダーはマウス操作だけにする。
         slider.refusesFirstResponder = true
         slider.toolTip = "文字とアイコンの明るさ・太さを調整します（マウスで動かします）"
-        slider.widthAnchor.constraint(equalToConstant: 105).isActive = true
+        slider.widthAnchor.constraint(equalToConstant: 135).isActive = true
 
         let separator = NSBox()
         separator.boxType = .separator
@@ -214,14 +214,38 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         separator.heightAnchor.constraint(equalToConstant: 18).isActive = true
 
         let guide = NSTextField(labelWithString: NavigationGuide.standard)
-        guide.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        guide.textColor = .labelColor
+        guide.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        guide.textColor = .white
         guide.alignment = .center
         guide.lineBreakMode = .byTruncatingTail
+        guide.translatesAutoresizingMaskIntoConstraints = false
         guide.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+        let guideBadge = NSView()
+        guideBadge.wantsLayer = true
+        guideBadge.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        guideBadge.layer?.cornerRadius = 6
+        guideBadge.translatesAutoresizingMaskIntoConstraints = false
+        guideBadge.addSubview(guide)
+        NSLayoutConstraint.activate([
+            guide.leadingAnchor.constraint(
+                equalTo: guideBadge.leadingAnchor,
+                constant: 7
+            ),
+            guide.trailingAnchor.constraint(
+                equalTo: guideBadge.trailingAnchor,
+                constant: -7
+            ),
+            guide.centerYAnchor.constraint(equalTo: guideBadge.centerYAnchor),
+            guideBadge.heightAnchor.constraint(equalToConstant: 24),
+        ])
+        guideBadge.setContentCompressionResistancePriority(
+            .required,
+            for: .horizontal
+        )
+
         let stack = NSStackView(
-            views: [title, light, slider, strong, separator, guide]
+            views: [title, light, slider, strong, separator, guideBadge]
         )
         stack.orientation = .horizontal
         stack.alignment = .centerY
