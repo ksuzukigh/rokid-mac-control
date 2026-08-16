@@ -4,7 +4,7 @@ import Foundation
 enum CameraAppPolicySelfTest {
     static func main() {
         precondition(
-            CameraAppPolicy.isOriginalCameraForeground(
+            CameraAppPolicy.isFullScreenCameraForeground(
                 """
                 topResumedActivity=ActivityRecord{123 u0 \
                 com.android.camera2/com.android.camera.CameraActivity t42}
@@ -12,7 +12,7 @@ enum CameraAppPolicySelfTest {
             )
         )
         precondition(
-            CameraAppPolicy.isOriginalCameraForeground(
+            CameraAppPolicy.isFullScreenCameraForeground(
                 """
                 topResumedActivity=ActivityRecord{123 u0 \
                 com.rokid.os.sprite.assistserver/\
@@ -21,7 +21,7 @@ enum CameraAppPolicySelfTest {
             )
         )
         precondition(
-            CameraAppPolicy.isOriginalCameraForeground(
+            CameraAppPolicy.isFullScreenCameraForeground(
                 """
                 ResumedActivity: ActivityRecord{123 u0 \
                 com.android.camera2/com.android.camera.CameraActivity t42}
@@ -29,7 +29,15 @@ enum CameraAppPolicySelfTest {
             )
         )
         precondition(
-            !CameraAppPolicy.isOriginalCameraForeground(
+            CameraAppPolicy.isFullScreenCameraForeground(
+                """
+                topResumedActivity=ActivityRecord{123 u0 \
+                io.github.ksuzukigh.rokidzoomincamera/.MainActivity t42}
+                """
+            )
+        )
+        precondition(
+            !CameraAppPolicy.isFullScreenCameraForeground(
                 """
                 topResumedActivity=ActivityRecord{123 u0 \
                 com.rokid.os.sprite.launcher/.main.SpriteMainActivity t42}
@@ -39,7 +47,7 @@ enum CameraAppPolicySelfTest {
             )
         )
         precondition(
-            !CameraAppPolicy.isOriginalCameraForeground(
+            !CameraAppPolicy.isFullScreenCameraForeground(
                 """
                 topResumedActivity=ActivityRecord{123 u0 \
                 io.github.ksuzukigh.phototomac/.MainActivity t42}

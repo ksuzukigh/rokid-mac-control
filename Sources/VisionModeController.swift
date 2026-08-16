@@ -595,7 +595,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
                 "-s", serial, "shell", "dumpsys", "activity", "activities",
             ], timeout: 3)
             let isForeground = result.succeeded
-                && CameraAppPolicy.isOriginalCameraForeground(result.output)
+                && CameraAppPolicy.isFullScreenCameraForeground(result.output)
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.isStopping else { return }
                 completion(isForeground)
@@ -603,7 +603,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// 純正カメラは背面カメラを専有するが、HUD用の画面転送にはカラーの
+    /// カメラアプリは背面カメラを専有するが、HUD用の画面転送にはカラーの
     /// プレビューが含まれる。カメラ受信を止め、Rokid画面をそのまま表示する。
     private func showOriginalCameraScreen(
         hudApplication: NSRunningApplication
@@ -621,8 +621,8 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             application.terminate()
         }
         cameraApplication = nil
-        window?.title = "Rokid AI Glasses RV101（純正カメラ）"
-        displayView?.showStatus("純正カメラへ切り替えています…")
+        window?.title = "Rokid AI Glasses RV101（カメラ）"
+        displayView?.showStatus("カメラ画面へ切り替えています…")
         startOriginalCameraScreenCapture(
             hudApplication: hudApplication
         )
@@ -678,7 +678,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             }
             self.originalCameraCaptureRecoveryScheduled = false
             self.originalCameraCaptureAttempts = 0
-            self.logger.log("視界表示 純正カメラ画面へ切替")
+            self.logger.log("視界表示 カメラ画面へ切替")
             self.scheduleSourceWindowHiding()
             self.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -700,19 +700,19 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             self.originalCameraCaptureRecoveryScheduled = true
             self.originalCameraCaptureAttempts += 1
             self.logger.log(
-                "視界表示 純正カメラ画面再接続 attempt=\(self.originalCameraCaptureAttempts) reason=\(error.localizedDescription)"
+                "視界表示 カメラ画面再接続 attempt=\(self.originalCameraCaptureAttempts) reason=\(error.localizedDescription)"
             )
             self.capture?.onFailure = nil
             self.capture?.stop()
             self.capture = nil
             self.compositor = nil
             self.displayView?.showStatus(
-                "純正カメラ画面を再接続しています…"
+                "カメラ画面を再接続しています…"
             )
 
             guard self.originalCameraCaptureAttempts <= 5 else {
                 self.requestSourceRestart(
-                    reason: "純正カメラ画面の受信が停止しました。"
+                    reason: "カメラ画面の受信が停止しました。"
                 )
                 return
             }
@@ -746,7 +746,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
                 "-s", serial, "shell", "dumpsys", "activity", "activities",
             ], timeout: 3)
             let isForeground = result.succeeded
-                && CameraAppPolicy.isOriginalCameraForeground(result.output)
+                && CameraAppPolicy.isFullScreenCameraForeground(result.output)
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.isStopping else { return }
                 self.originalCameraStateCheckScheduled = false
@@ -775,7 +775,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         compositor = nil
         window?.title = "Rokid AI Glasses RV101（ライブ映像）"
         displayView?.showStatus("ライブ映像へ戻しています…")
-        logger.log("視界表示 純正カメラ終了を検出")
+        logger.log("視界表示 カメラアプリ終了を検出")
 
         guard let hudApplication, !hudApplication.isTerminated else {
             requestSourceRestart(

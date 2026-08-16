@@ -4,7 +4,7 @@ Rokid AI Glasses RV101の画面をMacに表示し、Macのマウスとキーボ�
 
 ![MacからRokid AI Glassesを操作するイメージ](docs/images/mac-control-overview.png)
 
-**現在のバージョン: 1.2.4**
+**現在のバージョン: 1.2.5**
 
 [変更履歴を見る](CHANGELOG.md)
 
@@ -14,33 +14,37 @@ Rokid AI Glasses RV101の画面をMacに表示し、Macのマウスとキーボ�
 - MacのマウスとキーボードでRokidを操作する
 - 「ライブ映像」と「背景なし（省電力）」を選べる
 - USBとWi-Fiの両方で接続できる
-- Photo to Mac、純正「カメラ」、テンプル右上ボタンの3つの撮影方法が使える
+- Photo to Mac、純正「カメラ」、Rokid ZOOM IN CAMERA、テンプル右上ボタンの4つの撮影方法が使える
 
 ### ライブ映像
 
 Rokidのカメラ映像を背景にして、Rokidの文字やアイコンを重ねて表示します。見やすさは画面上部のスライダーで調整できます。
 
-純正「カメラ」を開くと、撮影画面のカラー映像へ自動で切り替わります。写真を撮ってカメラを閉じると、元のライブ映像へ自動で戻ります。
+純正「カメラ」または[Rokid ZOOM IN CAMERA](https://github.com/ksuzukigh/rokid-zoom-in-camera)を開くと、撮影画面のカラー映像へ自動で切り替わります。カメラを閉じると、元のライブ映像へ自動で戻ります。
 
 ![ライブ映像を背景にしてRokidの文字やアイコンを表示した例](docs/images/rokid-control-live-view.png)
 
 ### 背景なし（省電力）
 
-通常はカメラを使わず、黒い背景にRokidの文字やアイコンを表示します。純正「カメラ」を開いている間だけ、Mac表示がフルカラーの撮影画面へ切り替わります。
+通常はカメラを使わず、黒い背景にRokidの文字やアイコンを表示します。純正「カメラ」またはRokid ZOOM IN CAMERAを開いている間だけ、Mac表示がフルカラーの撮影画面へ切り替わります。
 
 ![背景なし（省電力）でRokidの文字やアイコンを表示した例](docs/images/rokid-control-connected.png)
 
-### 3つの撮影方法が使える
+### 4つの撮影方法が使える
 
-Rokid Controlを開いたまま、用途に合わせて3つの撮影方法を使い分けられます。「ライブ映像」と「背景なし（省電力）」のどちらでも撮影できます。
+Rokid Controlを開いたまま、用途に合わせて4つの撮影方法を使い分けられます。「ライブ映像」と「背景なし（省電力）」のどちらでも撮影できます。
 
-**緑のHUDでも、純正カメラの撮影画面はフルカラー**
+**緑のHUDでも、カメラアプリの撮影画面はフルカラー**
 
-RokidのHUD（文字・アイコン）は緑1色ですが、純正「カメラ」を開くと、「ライブ映像」と「背景なし（省電力）」のどちらでもMac表示がフルカラーの撮影画面へ自動で切り替わります。カメラを閉じると、選んでいた表示モードへ自動で戻ります。
+RokidのHUD（文字・アイコン）は緑1色ですが、純正「カメラ」またはRokid ZOOM IN CAMERAを開くと、「ライブ映像」と「背景なし（省電力）」のどちらでもMac表示がフルカラーの撮影画面へ自動で切り替わります。カメラアプリを閉じると、選んでいた表示モードへ自動で戻ります。
 
 **Photo to Macとは？**
 
 [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)は、Rokidで見ている景色を撮影し、その写真を同じWi-Fi上のMacへ直接送る別アプリです。写真はMacの「ピクチャ」にある「Rokid Inbox」フォルダへ自動で入り、スマートフォンやクラウドサービスは使いません。最初に一度だけ、RokidとMacへのセットアップが必要です。
+
+**Rokid ZOOM IN CAMERAとは？**
+
+[Rokid ZOOM IN CAMERA](https://github.com/ksuzukigh/rokid-zoom-in-camera)は、Rokidの広角カメラを1.0〜4.0倍で拡大表示し、写真と無音動画を撮影する別アプリです。Rokid ControlのMac画面で、倍率・操作案内・録画の経過時間も確認できます。
 
 <table>
   <thead>
@@ -65,6 +69,12 @@ RokidのHUD（文字・アイコン）は緑1色ですが、純正「カメラ�
       <td>Rokid本体</td>
     </tr>
     <tr>
+      <td><a href="https://github.com/ksuzukigh/rokid-zoom-in-camera">Rokid ZOOM IN CAMERA</a>（別アプリ）</td>
+      <td>拡大した撮影画面へ自動で切り替わり、終了後にライブ映像へ復帰</td>
+      <td>拡大した撮影画面をフルカラー表示し、終了後に背景なし画面へ復帰</td>
+      <td>Rokid本体</td>
+    </tr>
+    <tr>
       <td>テンプル右上の撮影ボタン</td>
       <td>撮影中だけライブ映像を一時停止し、撮影終了後に自動復帰</td>
       <td>撮影後も背景なし画面を継続</td>
@@ -73,7 +83,7 @@ RokidのHUD（文字・アイコン）は緑1色ですが、純正「カメラ�
   </tbody>
 </table>
 
-Photo to MacでMacへ送る、純正カメラのカラー画面を見ながら撮る、テンプルのボタンですぐ撮る、という3つの使い方を選べます。
+Photo to MacでMacへ送る、純正カメラのカラー画面を見ながら撮る、ZOOM IN CAMERAで拡大して撮る、テンプルのボタンですぐ撮る、という4つの使い方を選べます。
 
 ## 用意するもの
 
