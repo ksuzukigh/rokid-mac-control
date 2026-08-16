@@ -14,7 +14,9 @@ Rokid AI Glasses RV101の画面をMacに表示し、Macのマウスとキーボ�
 - MacのマウスとキーボードでRokidを操作する
 - 「ライブ映像」と「背景なし（省電力）」を選べる
 - USBとWi-Fiの両方で接続できる
-- Photo to Mac、純正「カメラ」、Rokid ZOOM IN CAMERA、テンプル右上ボタンの4つの撮影方法が使える
+- 用途に合わせて4つの撮影方法を使い分けられる
+
+Rokid Controlは、Rokid純正のカメラアプリだけでなく、別に配布している[Rokid ZOOM IN CAMERA](https://github.com/ksuzukigh/rokid-zoom-in-camera)にも対応しています。Rokid ZOOM IN CAMERAは、Rokidの広角カメラに1.0〜4.0倍のズーム機能を加え、写真と無音動画を撮影できるアプリです。
 
 ### ライブ映像
 
@@ -277,6 +279,7 @@ Wi-Fi切断が繰り返されている場合は、自動再接続を止める確
 
 - [Wi-Fi ON](https://github.com/ksuzukigh/rokid-wifi-on)：Rokid AI Glasses RV101のWi-Fiを復旧します。
 - [Photo to Mac](https://github.com/ksuzukigh/rokid-photo-to-mac)：Rokid AI Glasses RV101で撮影した写真をMacへ送ります。
+- [Rokid ZOOM IN CAMERA](https://github.com/ksuzukigh/rokid-zoom-in-camera)：Rokidの広角カメラで1.0〜4.0倍のズーム撮影ができます。
 
 ## ライセンス
 
