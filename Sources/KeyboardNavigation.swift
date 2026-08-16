@@ -62,7 +62,9 @@ enum LauncherShortcut: Int, CaseIterable {
     func devicePoint(forScreenWidth width: Int, height: Int) -> CGPoint {
         CGPoint(
             x: CGFloat(width) / 2 + CGFloat(horizontalOffset(for: width)),
-            y: CGFloat(height) / 2
+            // RV101のYodaOS下段インジケータは640px画面のy=490付近。
+            // 画面中央を使うと、現在のアプリ一覧内を誤タップしてしまう。
+            y: CGFloat(height) * 49 / 64
         )
     }
 }

@@ -125,7 +125,7 @@ enum KeyboardNavigationSelfTest {
 
     // MARK: - 座標
 
-    /// Hは480×640で中央Home座標240,320をタップする。
+    /// RV101の480×640画面では下段のy=490をタップする。
     private static func testShortcutCoordinates() {
         precondition(
             LauncherShortcut.memo.horizontalOffset(for: 480) == -32
@@ -140,19 +140,19 @@ enum KeyboardNavigationSelfTest {
             forScreenWidth: 480,
             height: 640
         )
-        precondition(home.x == 240 && home.y == 320)
+        precondition(home.x == 240 && home.y == 490)
 
         let memo = LauncherShortcut.memo.devicePoint(
             forScreenWidth: 480,
             height: 640
         )
-        precondition(memo.x == 208 && memo.y == 320)
+        precondition(memo.x == 208 && memo.y == 490)
 
         let apps = LauncherShortcut.applications.devicePoint(
             forScreenWidth: 480,
             height: 640
         )
-        precondition(apps.x == 272 && apps.y == 320)
+        precondition(apps.x == 272 && apps.y == 490)
     }
 
     // MARK: - H / M / A

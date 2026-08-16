@@ -162,6 +162,13 @@ final class KeyboardController {
         screenSize.get()
     }
 
+    /// 上部操作欄のボタンから、キーボード入力と同じ命令を実行する。
+    func trigger(_ key: RokidKey) {
+        actionQueue.async { [weak self] in
+            self?.router.handle(key)
+        }
+    }
+
     func start() -> Bool {
         let mask = (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.leftMouseDown.rawValue)

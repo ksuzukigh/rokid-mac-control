@@ -5,6 +5,8 @@ import Foundation
 
 final class VisionModeController: NSObject, NSWindowDelegate {
     private static let hudVisibilityDefaultsKey = "VisionHUDVisibility"
+    private static let compactAppSelectionGuide =
+        "←→ 選択  Enter決定  Esc戻る"
     private static let legacyBundleIdentifier =
         "io.github.ksuzukigh.rokid-control-vision-test"
 
@@ -26,6 +28,8 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     private var cameraApplication: NSRunningApplication?
     private var window: NSWindow?
     private var displayView: VisionDisplayView?
+    private weak var navigationGuideLabel: NSTextField?
+    private weak var shortcutButtonsStack: NSStackView?
     private var compositor: VisionFrameCompositor?
     private var capture: VisionCaptureCoordinator?
     private var captureRecoveryScheduled = false
@@ -114,6 +118,8 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         window?.orderOut(nil)
         window = nil
         displayView = nil
+        navigationGuideLabel = nil
+        shortcutButtonsStack = nil
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -122,7 +128,9 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     }
 
     func setAppSelection(_ isSelectingApp: Bool) {
-        displayView?.setAppSelection(isSelectingApp)
+        navigationGuideLabel?.stringValue = Self.compactAppSelectionGuide
+        navigationGuideLabel?.isHidden = !isSelectingApp
+        shortcutButtonsStack?.isHidden = isSelectingApp
     }
 
     private func createVisionWindow() {
@@ -156,27 +164,34 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             self?.keyboard.endAppSelection()
             self?.sendKey("KEYCODE_BACK")
         }
+
         window.contentView = displayView
-        addVisibilityControl(to: window)
+        navigationGuideLabel = addWindowControls(to: window)
         window.makeKeyAndOrderFront(nil)
 
         self.window = window
         self.displayView = displayView
     }
 
-    private func addVisibilityControl(to window: NSWindow) {
+    private func addWindowControls(to window: NSWindow) -> NSTextField {
         let accessory = NSTitlebarAccessoryViewController()
         accessory.layoutAttribute = .bottom
+        let controlPanelHeight: CGFloat = 34
 
         let background = NSVisualEffectView(
-            frame: NSRect(x: 0, y: 0, width: 480, height: 34)
+            frame: NSRect(
+                x: 0,
+                y: 0,
+                width: 480,
+                height: controlPanelHeight
+            )
         )
         background.material = .titlebar
         background.blendingMode = .withinWindow
         background.state = .active
 
-        let title = NSTextField(labelWithString: "文字・アイコンの見やすさ")
-        title.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        let title = NSTextField(labelWithString: "見やすさ")
+        title.font = NSFont.systemFont(ofSize: 11, weight: .medium)
         let light = NSTextField(labelWithString: "薄い")
         light.font = NSFont.systemFont(ofSize: 11)
         light.textColor = .secondaryLabelColor
@@ -195,14 +210,92 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         // 左右キーはRokidの操作へ回すため、このスライダーはマウス操作だけにする。
         slider.refusesFirstResponder = true
         slider.toolTip = "文字とアイコンの明るさ・太さを調整します（マウスで動かします）"
-        slider.widthAnchor.constraint(equalToConstant: 185).isActive = true
+        slider.widthAnchor.constraint(equalToConstant: 175).isActive = true
 
-        let stack = NSStackView(views: [title, light, slider, strong])
+        let separator = NSView()
+        separator.wantsLayer = true
+        separator.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        separator.widthAnchor.constraint(equalToConstant: 2).isActive = true
+        separator.heightAnchor.constraint(equalToConstant: 20).isActive = true
+
+        let guide = NSTextField(labelWithString: Self.compactAppSelectionGuide)
+        guide.font = NSFont.systemFont(ofSize: 9, weight: .semibold)
+        guide.textColor = .white
+        guide.alignment = .center
+        guide.lineBreakMode = .byTruncatingTail
+        guide.translatesAutoresizingMaskIntoConstraints = false
+        guide.isHidden = true
+        guide.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let guideBadge = NSView()
+        guideBadge.wantsLayer = true
+        guideBadge.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        guideBadge.layer?.cornerRadius = 6
+        guideBadge.translatesAutoresizingMaskIntoConstraints = false
+        guideBadge.addSubview(guide)
+
+        let memoButton = makeShortcutButton(
+            title: "M メモ",
+            tag: 0,
+            toolTip: "Rokidのメモを開きます"
+        )
+        let homeButton = makeShortcutButton(
+            title: "H Home",
+            tag: 1,
+            toolTip: "RokidのHomeを開きます"
+        )
+        let appsButton = makeShortcutButton(
+            title: "A アプリ",
+            tag: 2,
+            toolTip: "Rokidのアプリ一覧を開きます"
+        )
+        let shortcutButtons = NSStackView(
+            views: [memoButton, homeButton, appsButton]
+        )
+        shortcutButtons.orientation = .horizontal
+        shortcutButtons.alignment = .centerY
+        shortcutButtons.distribution = .fillEqually
+        shortcutButtons.spacing = 2
+        shortcutButtons.translatesAutoresizingMaskIntoConstraints = false
+        guideBadge.addSubview(shortcutButtons)
+        NSLayoutConstraint.activate([
+            guide.leadingAnchor.constraint(
+                equalTo: guideBadge.leadingAnchor,
+                constant: 7
+            ),
+            guide.trailingAnchor.constraint(
+                equalTo: guideBadge.trailingAnchor,
+                constant: -7
+            ),
+            guide.centerYAnchor.constraint(equalTo: guideBadge.centerYAnchor),
+            shortcutButtons.leadingAnchor.constraint(
+                equalTo: guideBadge.leadingAnchor,
+                constant: 4
+            ),
+            shortcutButtons.trailingAnchor.constraint(
+                equalTo: guideBadge.trailingAnchor,
+                constant: -4
+            ),
+            shortcutButtons.centerYAnchor.constraint(
+                equalTo: guideBadge.centerYAnchor
+            ),
+            guideBadge.widthAnchor.constraint(equalToConstant: 150),
+            guideBadge.heightAnchor.constraint(equalToConstant: 24),
+        ])
+        guideBadge.setContentCompressionResistancePriority(
+            .required,
+            for: .horizontal
+        )
+
+        let stack = NSStackView(
+            views: [title, light, slider, strong, separator, guideBadge]
+        )
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = 8
+        stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(stack)
+
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(
                 equalTo: background.leadingAnchor,
@@ -216,7 +309,48 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         ])
 
         accessory.view = background
+        accessory.preferredContentSize = NSSize(
+            width: 480,
+            height: controlPanelHeight
+        )
+        background.heightAnchor.constraint(
+            equalToConstant: controlPanelHeight
+        ).isActive = true
         window.addTitlebarAccessoryViewController(accessory)
+        shortcutButtonsStack = shortcutButtons
+        return guide
+    }
+
+    private func makeShortcutButton(
+        title: String,
+        tag: Int,
+        toolTip: String
+    ) -> NSButton {
+        let button = NSButton(
+            title: title,
+            target: self,
+            action: #selector(shortcutButtonPressed(_:))
+        )
+        button.tag = tag
+        button.font = NSFont.systemFont(ofSize: 9.5, weight: .semibold)
+        button.isBordered = false
+        button.contentTintColor = .white
+        button.focusRingType = .none
+        button.toolTip = toolTip
+        return button
+    }
+
+    @objc private func shortcutButtonPressed(_ sender: NSButton) {
+        switch sender.tag {
+        case 0:
+            keyboard.trigger(.memo)
+        case 1:
+            keyboard.trigger(.home)
+        case 2:
+            keyboard.trigger(.applications)
+        default:
+            return
+        }
     }
 
     @objc private func visibilityChanged(_ sender: NSSlider) {
