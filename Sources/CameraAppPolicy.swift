@@ -1,16 +1,17 @@
 import Foundation
 
 enum CameraAppPolicy {
-    /// RV101のホームから開くRokid独自の撮影画面と、Android標準Camera。
-    /// 地域・本体ソフトウェアによって入口が異なるため両方を扱う。
-    static let originalCameraPackages = [
+    /// 背面カメラを専有し、Rokid画面自体にカラープレビューを出すアプリ。
+    /// これらの起動中はRokid Control側のカメラ受信を停め、端末画面をそのまま表示する。
+    static let fullScreenCameraPackages = [
         "com.rokid.os.sprite.assistserver",
         "com.android.camera2",
+        "io.github.ksuzukigh.rokidzoomincamera",
     ]
 
     /// `dumpsys activity activities`の現在の最前面Activityだけを見る。
     /// 履歴に残ったCameraのActivityを、起動中と誤判定しない。
-    static func isOriginalCameraForeground(_ output: String) -> Bool {
+    static func isFullScreenCameraForeground(_ output: String) -> Bool {
         output
             .split(whereSeparator: \.isNewline)
             .contains { line in
@@ -22,7 +23,7 @@ enum CameraAppPolicy {
                     || value.hasPrefix("mResumedActivity:")
                     || value.hasPrefix("ResumedActivity:")
                 return isCurrentActivity
-                    && originalCameraPackages.contains { packageName in
+                    && fullScreenCameraPackages.contains { packageName in
                         value.contains("\(packageName)/")
                     }
             }

@@ -11,7 +11,7 @@ enum VisionFrameKind {
 
 enum VisionCompositionMode {
     case cameraWithHUD
-    /// 純正カメラのプレビューを含むRokid画面を、そのままカラー表示する。
+    /// カメラアプリのプレビューを含むRokid画面を、そのままカラー表示する。
     case deviceScreen
 }
 
