@@ -89,6 +89,15 @@ xcrun swiftc \
 "$ENCRYPTION_TEST_BINARY"
 
 xcrun swiftc \
+    -O -swift-version 5 -parse-as-library \
+    -target "$HOST_ARCH-apple-macos12.3" \
+    -o "$BUILD/R08RecoveryPolicySelfTest" \
+    "$ROOT/Sources/R08RecoveryPolicy.swift" \
+    "$ROOT/Tests/R08RecoveryPolicySelfTest.swift"
+
+"$BUILD/R08RecoveryPolicySelfTest"
+
+xcrun swiftc \
     -O \
     -swift-version 5 \
     -parse-as-library \

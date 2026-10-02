@@ -11,6 +11,7 @@ enum RokidConnectionError: LocalizedError {
     case cancelled
     case plaintextListenerRemains
     case safetyUnverified
+    case r08RecoveryFailed
 
     var errorDescription: String? {
         switch self {
@@ -34,6 +35,8 @@ enum RokidConnectionError: LocalizedError {
             return "macOSがRokid Controlのローカルネットワーク通信を止めています。「システム設定」→「プライバシーとセキュリティ」→「ローカルネットワーク」で「Rokid Control」を一度オフにしてからオンへ戻し、アプリを開き直してください。"
         case .cancelled:
             return "接続をキャンセルしました。"
+        case .r08RecoveryFailed:
+            return "R08の操作補助を復旧できませんでした。R08アプリとリングの設定は保持しています。Rokid Controlを終了して、もう一度開いてください。"
         }
     }
 }
@@ -65,6 +68,7 @@ final class RokidConnectionManager {
     private var sawPlaintextListener = false
     /// ADBがmacOSからローカルネットワーク経路を拒否されたか。
     private var sawLocalNetworkBlock = false
+    private var r08ClosureAttempted = false
 
     // 読み書きは必ず`stateLock`を通す。外から素で読めないよう`private`にする。
     private var serial = ""
@@ -298,6 +302,8 @@ final class RokidConnectionManager {
         guard !current.isEmpty else {
             throw RokidConnectionError.watchdogFailed
         }
+
+        try restoreR08HelpersIfConfigured(current)
 
         guard adb([
             "-s", current, "push", watchdogURL.path, remoteWatchdog,
@@ -717,6 +723,11 @@ final class RokidConnectionManager {
                 reject(candidate, reason: "Rokid以外の接続先です")
                 continue
             }
+            // R08が保存した5555番をTLS経由で閉じ、再探索へ戻る。
+            // 接続の暗号化判定そのものに例外は設けない。
+            if closeR08LegacyListenerIfNeeded(candidate.address) {
+                return nil
+            }
             // 採用して保存する前に、暗号化されていることを端末の状態から確かめる。
             // ポート番号だけでは判定できないため、ここまで繋いでから確認する。
             guard let reason = adoptionRejectionReason(candidate.address)
@@ -833,7 +844,142 @@ final class RokidConnectionManager {
         encryptionVerdictCache.removeAll()
         sawPlaintextListener = false
         sawLocalNetworkBlock = false
+        r08ClosureAttempted = false
         encryptionCacheLock.unlock()
+    }
+
+    private func hasVerifiedR08Helpers(_ device: String) -> Bool {
+        let packages = adb([
+            "-s", device, "shell", "pm", "list", "packages", R08RecoveryPolicy.package,
+        ], timeout: 3)
+        let services = adb([
+            "-s", device, "shell", "settings", "get", "secure",
+            "enabled_accessibility_services",
+        ], timeout: 3)
+        // YodaOSがスリープ時にサービス登録を外した場合も、本人が以前
+        // Self-armした印があれば、既存の補助処理で復旧できる。
+        let armed = adb([
+            "-s", device, "shell", "run-as", R08RecoveryPolicy.package,
+            "cat", "shared_prefs/r08_bridge.xml",
+        ], timeout: 3)
+        guard packages.succeeded, services.succeeded,
+              R08RecoveryPolicy.isEnabled(
+                packageList: packages.output, services: services.output,
+                armedSettings: armed.succeeded ? armed.output : ""
+              ) else { return false }
+        // Nexusなど別の管理機能がある場合は、その復旧処理へ介入しない。
+        let nexus = adb([
+            "-s", device, "shell", "test", "-f",
+            "/data/local/tmp/rokid-nexus-a11y-watchdog.sh",
+        ], timeout: 3)
+        guard nexus.status == 1, !nexus.timedOut, !nexus.cancelled else { return false }
+        let hashes = adb([
+            "-s", device, "shell", "sha256sum",
+        ] + R08RecoveryPolicy.helpers.map(\.path), timeout: 3)
+        guard hashes.succeeded, R08RecoveryPolicy.matchesHelpers(hashes.output)
+        else {
+            logger.log("R08操作補助の内容が確認済み版と一致しないため復旧処理は実行しません")
+            return false
+        }
+        return true
+    }
+
+    /// trueは接続処理を再起動したことを表す。次の探索で新しいTLSポートを使う。
+    private func closeR08LegacyListenerIfNeeded(_ device: String) -> Bool {
+        guard !r08ClosureAttempted,
+              let ports = plaintextListenerPorts(device),
+              Set(ports).isSubset(of: Set(["5555"])),
+              hasVerifiedR08Helpers(device) else { return false }
+        let tlsPort = adb([
+            "-s", device, "shell", "getprop", "service.adb.tls.port",
+        ], timeout: 3)
+        guard tlsPort.succeeded,
+              ConnectionEncryption.port(of: device)
+                == tlsPort.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        else { return false }
+        let sockets = adb(["-s", device, "shell", "ss", "-ltn"], timeout: 3)
+        guard sockets.succeeded else { return false }
+        if ports.isEmpty && R08RecoveryPolicy.legacyListenerIsClosed(sockets.output) {
+            return false
+        }
+        let addresses = adb([
+            "-s", device, "shell", "getprop", "service.adb.listen_addrs",
+        ], timeout: 3)
+        guard addresses.succeeded else { return false }
+        let value = addresses.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard ["", "tcp:localhost:5555", "tcp:127.0.0.1:5555"].contains(value) else {
+            logger.log("別の接続設定があるためR08の入口を変更しません")
+            return false
+        }
+        r08ClosureAttempted = true
+        logger.log("R08と併用するため旧方式の入口を閉じ、TLSで操作補助を復旧します")
+        for property in Self.plaintextPortProperties {
+            let changed = adb([
+                "-s", device, "shell", "setprop", property,
+                property == "persist.adb.tcp.port" ? "-1" : "0",
+            ], timeout: 3)
+            guard changed.succeeded else { return false }
+        }
+        // 初期の試験や他の準備が指定した既知の5555番アドレスも消す。
+        if ["tcp:localhost:5555", "tcp:127.0.0.1:5555"].contains(value) {
+            guard adb([
+                "-s", device, "shell", "setprop", "service.adb.listen_addrs", "''",
+            ], timeout: 3).succeeded else { return false }
+        }
+        guard let remaining = plaintextListenerPorts(device), remaining.isEmpty else {
+            return false
+        }
+        _ = adb(["-s", device, "usb"], timeout: 8)
+        // 切れる前のTLS接続を同じ入口として採用しない。
+        Thread.sleep(forTimeInterval: 1)
+        encryptionCacheLock.lock()
+        encryptionVerdictCache.removeAll()
+        encryptionCacheLock.unlock()
+        return true
+    }
+
+    private func restoreR08HelpersIfConfigured(_ device: String) throws {
+        guard hasVerifiedR08Helpers(device) else { return }
+        let sockets = adb(["-s", device, "shell", "ss", "-ltn"], timeout: 3)
+        guard sockets.succeeded,
+              R08RecoveryPolicy.legacyListenerIsClosed(sockets.output) else {
+            logger.log("R08復旧前に5555番の閉鎖を確認できません")
+            throw RokidConnectionError.r08RecoveryFailed
+        }
+        for helper in R08RecoveryPolicy.helpers {
+            var status = adb([
+                "-s", device, "shell", "sh", helper.path, "status",
+            ], timeout: 3)
+            if status.succeeded, let pid = R08RecoveryPolicy.runningPID(status.output) {
+                let process = adb([
+                    "-s", device, "shell", "cat", "/proc/\(pid)/cmdline",
+                ], timeout: 3)
+                guard process.succeeded else { throw RokidConnectionError.r08RecoveryFailed }
+                if R08RecoveryPolicy.isHelperProcess(process.output, helper: helper) {
+                    continue
+                }
+                // PID再利用で別の処理を終了させない。古いPID控えだけ取り除く。
+                guard adb([
+                    "-s", device, "shell", "rm", "-f", helper.pidFile,
+                ], timeout: 3).succeeded else { throw RokidConnectionError.r08RecoveryFailed }
+            }
+            guard adb([
+                "-s", device, "shell", "sh", helper.path, "start",
+            ], timeout: 5).succeeded else { throw RokidConnectionError.r08RecoveryFailed }
+            status = adb([
+                "-s", device, "shell", "sh", helper.path, "status",
+            ], timeout: 3)
+            guard status.succeeded, let pid = R08RecoveryPolicy.runningPID(status.output)
+            else { throw RokidConnectionError.r08RecoveryFailed }
+            let process = adb([
+                "-s", device, "shell", "cat", "/proc/\(pid)/cmdline",
+            ], timeout: 3)
+            guard process.succeeded,
+                  R08RecoveryPolicy.isHelperProcess(process.output, helper: helper)
+            else { throw RokidConnectionError.r08RecoveryFailed }
+            logger.log("R08操作補助をTLS経由で復旧 path=\(helper.path) pid=\(pid)")
+        }
+        logger.log("R08とMac操作の併用を準備しました（R08のAPK・個人設定は保持）")
     }
 
     private func discoverSecureWiFi() -> [String] {
