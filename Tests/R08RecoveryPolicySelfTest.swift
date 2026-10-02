@@ -45,6 +45,40 @@ enum R08RecoveryPolicySelfTest {
         }
         precondition(!R08RecoveryPolicy.legacyListenerIsClosed("ss: Permission denied"))
         precondition(!R08RecoveryPolicy.legacyListenerIsClosed(header + "LISTEN incomplete"))
+        testPendingRequestReset()
         print("R08 recovery policy self-test passed")
+    }
+
+    private static func testPendingRequestReset() {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("r08-request-test-\(UUID().uuidString)")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let request = folder.appendingPathComponent("request with ' quote")
+            let personal = folder.appendingPathComponent("personal-record.txt")
+            try "wifi_disable:old-request".write(to: request, atomically: true, encoding: .utf8)
+            try "keep this record".write(to: personal, atomically: true, encoding: .utf8)
+            runReset(request.path)
+            let resetRequest = try String(contentsOf: request)
+            precondition(resetRequest.isEmpty)
+            try FileManager.default.removeItem(at: request)
+            try FileManager.default.createSymbolicLink(at: request, withDestinationURL: personal)
+            runReset(request.path)
+            let keptRecord = try String(contentsOf: personal)
+            precondition(keptRecord == "keep this record")
+            let absent = folder.appendingPathComponent("not-created")
+            runReset(absent.path)
+            precondition(!FileManager.default.fileExists(atPath: absent.path))
+        } catch { preconditionFailure("Pending-request reset test failed: \(error)") }
+    }
+
+    private static func runReset(_ path: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", R08RecoveryPolicy.resetPendingRequestCommand(path)]
+        do { try process.run(); process.waitUntilExit() }
+        catch { preconditionFailure("Cannot run request-reset test: \(error)") }
+        precondition(process.terminationStatus == 0)
     }
 }

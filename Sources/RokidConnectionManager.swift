@@ -963,6 +963,15 @@ final class RokidConnectionManager {
                     "-s", device, "shell", "rm", "-f", helper.pidFile,
                 ], timeout: 3).succeeded else { throw RokidConnectionError.r08RecoveryFailed }
             }
+            // 元のイベント待ち方式は起動直後にrequestを読む。過去の
+            // ショートカットやWi-Fi切断を再実行させない。稼働中の補助は
+            // 上でcontinueしており、現在受け付けている入力は消さない。
+            if let request = helper.pendingRequest {
+                guard adb([
+                    "-s", device, "shell",
+                    R08RecoveryPolicy.resetPendingRequestCommand(request),
+                ], timeout: 3).succeeded else { throw RokidConnectionError.r08RecoveryFailed }
+            }
             guard adb([
                 "-s", device, "shell", "sh", helper.path, "start",
             ], timeout: 5).succeeded else { throw RokidConnectionError.r08RecoveryFailed }

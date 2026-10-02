@@ -11,6 +11,7 @@ enum R08RecoveryPolicy {
         let path: String
         let pidFile: String
         let sha256: String
+        let pendingRequest: String?
     }
 
     // R08 Access Bridge 2.0.1の正式APK内res/rawと実機ファイルで照合済み。
@@ -18,12 +19,14 @@ enum R08RecoveryPolicy {
         Helper(
             path: "/data/local/tmp/r08-shortcut-bridge.sh",
             pidFile: "/data/local/tmp/r08-shortcut-bridge.pid",
-            sha256: "50e9e08693a1ad0208e7a231fc8cc7d0a410f7ea36c9b82711d87a3667b9f3f8"
+            sha256: "50e9e08693a1ad0208e7a231fc8cc7d0a410f7ea36c9b82711d87a3667b9f3f8",
+            pendingRequest: "/sdcard/Android/data/com.anezium.r08accessbridge/files/shortcut_bridge/request"
         ),
         Helper(
             path: "/data/local/tmp/r08-a11y-watchdog.sh",
             pidFile: "/data/local/tmp/r08-a11y-watchdog.pid",
-            sha256: "fcc0b20b166c8bd0f653913f3b3a08b28b1928ba62b4f8dba9807d8db5f646db"
+            sha256: "fcc0b20b166c8bd0f653913f3b3a08b28b1928ba62b4f8dba9807d8db5f646db",
+            pendingRequest: nil
         ),
     ]
 
@@ -76,6 +79,13 @@ enum R08RecoveryPolicy {
     static func isHelperProcess(_ commandLine: String, helper: Helper) -> Bool {
         commandLine.split { $0 == "\0" || $0.isWhitespace }
             .contains { String($0) == helper.path }
+    }
+
+    /// 補助が止まった間の命令を、起動時に遅れて実行させない。
+    /// 既存の通常ファイルだけを空にし、リンク先や個人記録には触れない。
+    static func resetPendingRequestCommand(_ path: String) -> String {
+        let quoted = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        return "if [ -f \(quoted) ] && [ ! -L \(quoted) ]; then : > \(quoted); fi"
     }
 
     /// 設定を書き換えただけで稼働中の入口が残る場合も見逃さない。
