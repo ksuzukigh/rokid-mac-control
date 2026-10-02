@@ -12,6 +12,7 @@ enum R08RecoveryPolicy {
         let pidFile: String
         let sha256: String
         let pendingRequest: String?
+        let restoreAtStartup: Bool
     }
 
     // R08 Access Bridge 2.0.1の正式APK内res/rawと実機ファイルで照合済み。
@@ -20,13 +21,17 @@ enum R08RecoveryPolicy {
             path: "/data/local/tmp/r08-shortcut-bridge.sh",
             pidFile: "/data/local/tmp/r08-shortcut-bridge.pid",
             sha256: "50e9e08693a1ad0208e7a231fc8cc7d0a410f7ea36c9b82711d87a3667b9f3f8",
-            pendingRequest: "/sdcard/Android/data/com.anezium.r08accessbridge/files/shortcut_bridge/request"
+            pendingRequest: "/sdcard/Android/data/com.anezium.r08accessbridge/files/shortcut_bridge/request",
+            restoreAtStartup: true
         ),
         Helper(
             path: "/data/local/tmp/r08-a11y-watchdog.sh",
             pidFile: "/data/local/tmp/r08-a11y-watchdog.pid",
             sha256: "fcc0b20b166c8bd0f653913f3b3a08b28b1928ba62b4f8dba9807d8db5f646db",
-            pendingRequest: nil
+            pendingRequest: nil,
+            // 復旧のたびにMainActivityを開きHOMEを送るため、通常操作と競合する。
+            // 入力サービスは起動時だけ登録し、この常駐監視は再開しない。
+            restoreAtStartup: false
         ),
     ]
 
@@ -79,6 +84,34 @@ enum R08RecoveryPolicy {
     static func isHelperProcess(_ commandLine: String, helper: Helper) -> Bool {
         commandLine.split { $0 == "\0" || $0.isWhitespace }
             .contains { String($0) == helper.path }
+    }
+
+    enum HelperAction: Equatable { case keep, start, stop }
+
+    static var recoveryOrder: [Helper] {
+        // 画面を戻す監視の停止を、新しい補助や入力サービスの復旧より先に行う。
+        helpers.filter { !$0.restoreAtStartup } + helpers.filter { $0.restoreAtStartup }
+    }
+
+    static func action(for helper: Helper, isRunning: Bool) -> HelperAction {
+        if helper.restoreAtStartup { return isRunning ? .keep : .start }
+        return isRunning ? .stop : .keep
+    }
+
+    static func hasAccessibilityService(_ services: String) -> Bool {
+        services.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ":").contains { String($0) == accessibilityService }
+    }
+
+    /// 他のサービスを保持したまま、登録だけを復旧する。ActivityやHOMEは開かない。
+    static func accessibilityRegistrationCommand(_ existing: String) -> String {
+        let current = existing.trimmingCharacters(in: .whitespacesAndNewlines)
+        let services = hasAccessibilityService(current) ? current
+            : (current.isEmpty || current == "null" ? accessibilityService
+                : current + ":" + accessibilityService)
+        let quoted = "'" + services.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        return "settings put secure enabled_accessibility_services \(quoted)"
+            + " && settings put secure accessibility_enabled 1"
     }
 
     /// 補助が止まった間の命令を、起動時に遅れて実行させない。

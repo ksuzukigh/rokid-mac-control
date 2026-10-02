@@ -856,8 +856,8 @@ final class RokidConnectionManager {
             "-s", device, "shell", "settings", "get", "secure",
             "enabled_accessibility_services",
         ], timeout: 3)
-        // YodaOSがスリープ時にサービス登録を外した場合も、本人が以前
-        // Self-armした印があれば、既存の補助処理で復旧できる。
+        // YodaOSがサービス登録を外した場合も、本人が以前
+        // Self-armした印があれば、起動時に登録だけを復旧できる。
         let armed = adb([
             "-s", device, "shell", "run-as", R08RecoveryPolicy.package,
             "cat", "shared_prefs/r08_bridge.xml",
@@ -946,22 +946,58 @@ final class RokidConnectionManager {
             logger.log("R08復旧前に5555番の閉鎖を確認できません")
             throw RokidConnectionError.r08RecoveryFailed
         }
-        for helper in R08RecoveryPolicy.helpers {
+        for helper in R08RecoveryPolicy.recoveryOrder {
             var status = adb([
                 "-s", device, "shell", "sh", helper.path, "status",
             ], timeout: 3)
+            guard status.succeeded || (
+                status.status == 1 && !status.timedOut && !status.cancelled
+                && status.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .hasPrefix("not running")
+            ) else { throw RokidConnectionError.r08RecoveryFailed }
+            var runningPID: String?
             if status.succeeded, let pid = R08RecoveryPolicy.runningPID(status.output) {
                 let process = adb([
                     "-s", device, "shell", "cat", "/proc/\(pid)/cmdline",
                 ], timeout: 3)
                 guard process.succeeded else { throw RokidConnectionError.r08RecoveryFailed }
                 if R08RecoveryPolicy.isHelperProcess(process.output, helper: helper) {
-                    continue
+                    runningPID = pid
+                } else {
+                    // PID再利用で別の処理を終了させない。古いPID控えだけ取り除く。
+                    guard adb([
+                        "-s", device, "shell", "rm", "-f", helper.pidFile,
+                    ], timeout: 3).succeeded else { throw RokidConnectionError.r08RecoveryFailed }
                 }
-                // PID再利用で別の処理を終了させない。古いPID控えだけ取り除く。
+            }
+            switch R08RecoveryPolicy.action(for: helper, isRunning: runningPID != nil) {
+            case .keep:
+                continue
+            case .stop:
+                // 確認済みの旧監視だけを止め、R08アプリや入力サービスは残す。
                 guard adb([
-                    "-s", device, "shell", "rm", "-f", helper.pidFile,
+                    "-s", device, "shell", "sh", helper.path, "stop",
                 ], timeout: 3).succeeded else { throw RokidConnectionError.r08RecoveryFailed }
+                if let pid = runningPID {
+                    let exists = adb([
+                        "-s", device, "shell", "test", "-d", "/proc/\(pid)",
+                    ], timeout: 3)
+                    guard !exists.timedOut, !exists.cancelled,
+                          exists.status == 0 || exists.status == 1
+                    else { throw RokidConnectionError.r08RecoveryFailed }
+                    if exists.succeeded {
+                        let after = adb([
+                            "-s", device, "shell", "cat", "/proc/\(pid)/cmdline",
+                        ], timeout: 3)
+                        guard after.succeeded,
+                              !R08RecoveryPolicy.isHelperProcess(after.output, helper: helper)
+                        else { throw RokidConnectionError.r08RecoveryFailed }
+                    }
+                }
+                logger.log("ホームへ戻すR08の旧監視を停止（入力サービスは保持）")
+                continue
+            case .start:
+                break
             }
             // 元のイベント待ち方式は起動直後にrequestを読む。過去の
             // ショートカットやWi-Fi切断を再実行させない。稼働中の補助は
@@ -987,6 +1023,35 @@ final class RokidConnectionManager {
                   R08RecoveryPolicy.isHelperProcess(process.output, helper: helper)
             else { throw RokidConnectionError.r08RecoveryFailed }
             logger.log("R08操作補助をTLS経由で復旧 path=\(helper.path) pid=\(pid)")
+        }
+        let services = adb([
+            "-s", device, "shell", "settings", "get", "secure",
+            "enabled_accessibility_services",
+        ], timeout: 3)
+        let enabled = adb([
+            "-s", device, "shell", "settings", "get", "secure", "accessibility_enabled",
+        ], timeout: 3)
+        guard services.succeeded, enabled.succeeded else {
+            throw RokidConnectionError.r08RecoveryFailed
+        }
+        if !R08RecoveryPolicy.hasAccessibilityService(services.output)
+            || enabled.output.trimmingCharacters(in: .whitespacesAndNewlines) != "1" {
+            guard adb([
+                "-s", device, "shell",
+                R08RecoveryPolicy.accessibilityRegistrationCommand(services.output),
+            ], timeout: 3).succeeded else { throw RokidConnectionError.r08RecoveryFailed }
+            let verifiedServices = adb([
+                "-s", device, "shell", "settings", "get", "secure",
+                "enabled_accessibility_services",
+            ], timeout: 3)
+            let verifiedEnabled = adb([
+                "-s", device, "shell", "settings", "get", "secure", "accessibility_enabled",
+            ], timeout: 3)
+            guard verifiedServices.succeeded, verifiedEnabled.succeeded,
+                  R08RecoveryPolicy.hasAccessibilityService(verifiedServices.output),
+                  verifiedEnabled.output.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+            else { throw RokidConnectionError.r08RecoveryFailed }
+            logger.log("R08の入力サービス登録を復旧（画面移動なし・常駐監視なし）")
         }
         logger.log("R08とMac操作の併用を準備しました（R08のAPK・個人設定は保持）")
     }
