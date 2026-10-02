@@ -61,10 +61,13 @@ xcrun swiftc \
     -o "$NAVIGATION_TEST_BINARY" \
     "$ROOT/Sources/KeyboardNavigation.swift" \
     "$ROOT/Sources/KeyboardCommandRouter.swift" \
+    "$ROOT/Sources/SystemAdjustmentPolicy.swift" \
     "$ROOT/Sources/ScrcpyWindowPolicy.swift" \
     "$ROOT/Tests/KeyboardNavigationSelfTest.swift"
 
 "$NAVIGATION_TEST_BINARY"
+python3 "$ROOT/Tests/DeviceHelperSelfTest.py"
+python3 "$ROOT/Tests/R08DirectionBridgeSelfTest.py"
 
 xcrun swiftc \
     -O \
@@ -87,6 +90,15 @@ xcrun swiftc \
     "$ROOT/Tests/ConnectionEncryptionSelfTest.swift"
 
 "$ENCRYPTION_TEST_BINARY"
+
+xcrun swiftc \
+    -O -swift-version 5 -parse-as-library \
+    -target "$HOST_ARCH-apple-macos12.3" \
+    -o "$BUILD/R08RecoveryPolicySelfTest" \
+    "$ROOT/Sources/R08RecoveryPolicy.swift" \
+    "$ROOT/Tests/R08RecoveryPolicySelfTest.swift"
+
+"$BUILD/R08RecoveryPolicySelfTest"
 
 xcrun swiftc \
     -O \

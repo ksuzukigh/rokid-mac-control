@@ -28,6 +28,7 @@ private final class ADBCommandSink: RokidCommandSink {
     private let connection: RokidConnectionManager
     private let logger: AppLogger
     private let screenSize: ScreenSizeStore
+    private var cachedIndicator: (serial: String, width: Int, height: Int, bounds: CGRect)?
 
     init(
         connection: RokidConnectionManager,
@@ -45,6 +46,15 @@ private final class ADBCommandSink: RokidCommandSink {
             sendKeyEvent(androidKey)
         case .openShortcut(let shortcut):
             openShortcut(shortcut)
+        case .adjustSettingIfForeground(let androidKey):
+            let serial = connection.currentSerial()
+            let foreground = connection.runADB([
+                "-s", serial, "shell", "dumpsys", "activity", "activities",
+            ], timeout: 2)
+            guard foreground.succeeded,
+                  SystemAdjustmentPolicy.isForeground(foreground.output) else { return }
+            sendKeyEvent(androidKey)
+            logger.log("純正の音量・明るさを左右キーで調整")
         }
     }
 
@@ -66,15 +76,28 @@ private final class ADBCommandSink: RokidCommandSink {
             "-s", serial, "shell", "input", "keyevent", "KEYCODE_HOME",
         ])
         waitForLauncher(serial: serial)
-        let point = shortcut.devicePoint(
-            forScreenWidth: size.0,
-            height: size.1
-        )
+        guard let indicator = indicatorBounds(serial: serial, size: size) else {
+            logger.log("下段の現在位置を確認できないためタップを実行しません")
+            return
+        }
+        let point = shortcut.devicePoint(in: indicator)
         _ = connection.runADB([
             "-s", serial, "shell", "input", "tap",
             "\(Int(point.x))", "\(Int(point.y))",
         ])
         logger.log("下段を開く \(shortcut.title)")
+    }
+
+    private func indicatorBounds(serial: String, size: (Int, Int)) -> CGRect? {
+        if let cached = cachedIndicator, cached.serial == serial,
+           cached.width == size.0, cached.height == size.1 { return cached.bounds }
+        guard let xml = connection.readLauncherNavigationXML(serial),
+              xml.succeeded, let bounds = LauncherIndicatorLocator.bounds(
+            in: xml.output, width: size.0, height: size.1
+        ) else { return nil }
+        cachedIndicator = (serial, size.0, size.1, bounds)
+        logger.log("純正ランチャーの下段位置を取得 bounds=\(bounds)")
+        return bounds
     }
 
     private func waitForLauncher(serial: String) {

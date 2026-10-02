@@ -6,6 +6,8 @@ enum RokidCommand: Equatable {
     case keyEvent(String)
     /// ウェイク→Home のあとに下段アイコンをタップする。
     case openShortcut(LauncherShortcut)
+    /// 純正の音量・明るさ画面が前面の場合だけ左右を送る。
+    case adjustSettingIfForeground(String)
 }
 
 /// Rokidへ命令を届ける相手。実機ではADB、自動試験では模擬実装を差し込む。
@@ -74,7 +76,10 @@ final class KeyboardCommandRouter {
         case .left, .right:
             // アプリ一覧を開いてからだけ左右キーとして送る。それ以前は
             // Rokid側の選択状態と食い違うため、ADBへ送らない。
-            guard selection.isActive else { return false }
+            guard selection.isActive else {
+                sink.send(.adjustSettingIfForeground(Self.androidKey(for: key)))
+                return true
+            }
             sink.send(.keyEvent(Self.androidKey(for: key)))
             return true
 

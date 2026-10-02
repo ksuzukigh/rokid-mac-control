@@ -34,6 +34,7 @@ enum KeyboardNavigationSelfTest {
         testScrcpyWindowPolicy()
         testLauncherActivityPolicy()
         testShortcutCoordinates()
+        testGuideDoesNotCoverVideo()
         testDirectShortcuts()
         testLeftRightAndEnterRequireAppList()
         testEscapeAlwaysSendsBack()
@@ -42,7 +43,21 @@ enum KeyboardNavigationSelfTest {
         testSelectionEndsOnHomeAndMemo()
         testRecoversAfterFailedCommand()
         testGuideText()
+        testSystemAdjustmentScope()
         print("Keyboard navigation self-test passed")
+    }
+
+    private static func testSystemAdjustmentScope() {
+        for activity in SystemAdjustmentPolicy.activities {
+            for component in ["\(SystemAdjustmentPolicy.package)/\(activity)",
+                              "\(SystemAdjustmentPolicy.package)/\(SystemAdjustmentPolicy.package)\(activity)"] {
+                precondition(SystemAdjustmentPolicy.isForeground("topResumedActivity=ActivityRecord{123 u0 \(component) t42}"))
+                precondition(!SystemAdjustmentPolicy.isForeground("Hist #0: ActivityRecord{123 u0 \(component) t42}"))
+                precondition(!SystemAdjustmentPolicy.isForeground("topResumedActivity=ActivityRecord{123 u0 \(component)Extra t42}"))
+            }
+        }
+        precondition(!SystemAdjustmentPolicy.isForeground("ResumedActivity: ActivityRecord{123 u0 com.rokid.os.sprite.launcher/.main.SpriteMainActivity t42}"))
+        precondition(!SystemAdjustmentPolicy.isForeground("ResumedActivity: ActivityRecord{123 u0 other.app/.page.volume.SettingVolumeActivity t42}"))
     }
 
     private static func testKeyboardFocusPolicy() {
@@ -110,6 +125,9 @@ enum KeyboardNavigationSelfTest {
                 """
             )
         )
+        precondition(LauncherActivityPolicy.isLauncherForeground(
+            "mFocusedApp=ActivityRecord{123 u0 com.rokid.os.sprite.launcher/.main.SpriteMainActivity t42}"
+        ))
         precondition(
             !LauncherActivityPolicy.isLauncherForeground(
                 """
@@ -125,34 +143,41 @@ enum KeyboardNavigationSelfTest {
 
     // MARK: - 座標
 
-    /// RV101の480×640画面では下段のy=490をタップする。
+    /// 新旧のYodaOS配置で現在の領域だけを押し、別のアプリの領域は使わない。
     private static func testShortcutCoordinates() {
-        precondition(
-            LauncherShortcut.memo.horizontalOffset(for: 480) == -32
-        )
-        precondition(
-            LauncherShortcut.home.horizontalOffset(for: 480) == 0
-        )
-        precondition(
-            LauncherShortcut.applications.horizontalOffset(for: 480) == 32
-        )
-        let home = LauncherShortcut.home.devicePoint(
-            forScreenWidth: 480,
-            height: 640
-        )
-        precondition(home.x == 240 && home.y == 490)
+        func xml(_ bounds: String, package: String = LauncherActivityPolicy.launcherPackage) -> String {
+            "<hierarchy><node package=\"\(package)\" resource-id=\"\(package):id/indicator\" enabled=\"true\" clickable=\"true\" bounds=\"\(bounds)\"/></hierarchy>"
+        }
+        for (value, y) in [("[196,318][284,342]", CGFloat(330)), ("[196,478][284,502]", CGFloat(490))] {
+            guard let bounds = LauncherIndicatorLocator.bounds(in: xml(value), width: 480, height: 640)
+            else { preconditionFailure("RV101の配置を読み取れない") }
+            let home = LauncherShortcut.home.devicePoint(in: bounds)
+            precondition(home.x == 240 && home.y == y)
+            let memo = LauncherShortcut.memo.devicePoint(in: bounds)
+            let apps = LauncherShortcut.applications.devicePoint(in: bounds)
+            precondition(bounds.contains(memo) && bounds.contains(apps))
+            precondition(memo.x < home.x && apps.x > home.x)
+        }
+        precondition(LauncherIndicatorLocator.bounds(in: xml("[196,318][284,342]", package: "other.app"), width: 480, height: 640) == nil)
+        precondition(LauncherIndicatorLocator.bounds(in: xml("[196,318][999,342]"), width: 480, height: 640) == nil)
+        precondition(LauncherIndicatorLocator.bounds(in: "<hierarchy>", width: 480, height: 640) == nil)
+        let duplicate = xml("[196,318][284,342]").replacingOccurrences(of: "</hierarchy>", with: "<node package=\"com.rokid.os.sprite.launcher\" resource-id=\"com.rokid.os.sprite.launcher:id/indicator\" enabled=\"true\" clickable=\"true\" bounds=\"[196,478][284,502]\"/></hierarchy>")
+        precondition(LauncherIndicatorLocator.bounds(in: duplicate, width: 480, height: 640) == nil)
+    }
 
-        let memo = LauncherShortcut.memo.devicePoint(
-            forScreenWidth: 480,
-            height: 640
-        )
-        precondition(memo.x == 208 && memo.y == 490)
-
-        let apps = LauncherShortcut.applications.devicePoint(
-            forScreenWidth: 480,
-            height: 640
-        )
-        precondition(apps.x == 272 && apps.y == 490)
+    private static func testGuideDoesNotCoverVideo() {
+        let screen = CGRect(x: 0, y: 24, width: 1920, height: 1032)
+        for window in [
+            CGRect(x: 300, y: 100, width: 480, height: 670),
+            CGRect(x: 300, y: 386, width: 480, height: 670),
+            CGRect(x: -20, y: 100, width: 240, height: 360),
+        ] {
+            guard let guide = NavigationGuideLayout.frame(window: window, visibleScreen: screen)
+            else { preconditionFailure("画面外に置ける案内を生成できない") }
+            precondition(screen.contains(guide))
+            precondition(!guide.intersects(window))
+        }
+        precondition(NavigationGuideLayout.frame(window: screen, visibleScreen: screen) == nil)
     }
 
     // MARK: - H / M / A
@@ -193,10 +218,13 @@ enum KeyboardNavigationSelfTest {
         let sink = MockCommandSink()
         let router = KeyboardCommandRouter(sink: sink)
 
-        for key in [RokidKey.left, .right, .enter] {
-            precondition(router.handle(key) == false)
-        }
-        precondition(sink.drain().isEmpty)
+        precondition(router.handle(.left))
+        precondition(router.handle(.right))
+        precondition(!router.handle(.enter))
+        precondition(sink.drain() == [
+            .adjustSettingIfForeground("KEYCODE_DPAD_LEFT"),
+            .adjustSettingIfForeground("KEYCODE_DPAD_RIGHT"),
+        ])
 
         router.handle(.applications)
         precondition(sink.drain() == [.openShortcut(.applications)])
@@ -215,7 +243,7 @@ enum KeyboardNavigationSelfTest {
         _ = sink.drain()
         router.handle(.left)
         router.handle(.enter)
-        precondition(sink.drain().isEmpty)
+        precondition(sink.drain() == [.adjustSettingIfForeground("KEYCODE_DPAD_LEFT")])
     }
 
     // MARK: - Esc
@@ -312,7 +340,7 @@ enum KeyboardNavigationSelfTest {
             // 終えたあとの左右キーは送らない。
             _ = sink.drain()
             router.handle(.right)
-            precondition(sink.drain().isEmpty, "\(ending): 終了後に矢印を送っている")
+            precondition(sink.drain() == [.adjustSettingIfForeground("KEYCODE_DPAD_RIGHT")], "\(ending): 終了後に無条件の矢印を送っている")
         }
     }
 

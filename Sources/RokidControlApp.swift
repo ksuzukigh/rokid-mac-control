@@ -1012,7 +1012,7 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
             == scrcpyApplication?.processIdentifier
     }
 
-    /// scrcpyウインドウの上端へ案内パネルを重ねる。
+    /// scrcpy映像を隠さないよう、ウインドウ外へ案内を置く。
     private func showNavigationGuide(
         frontmost frontmostApplication: NSRunningApplication? = nil
     ) {
@@ -1070,13 +1070,12 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         navigationGuideView?.text = NavigationGuide.text(
             isSelectingApp: isSelectingApp
         )
-        let width = max(min(bounds.width - 24, 460), 220)
-        // kCGWindowBoundsはタイトルバーを含む。閉じるボタンを隠さないよう、
-        // タイトルバーの下から案内を置く。
-        let titleBarHeight: CGFloat = 28
+        guard let screen = quartzVisibleScreen(containing: CGPoint(x: bounds.midX, y: bounds.midY)),
+              let guideFrame = NavigationGuideLayout.frame(window: bounds, visibleScreen: screen)
+        else { window.orderOut(nil); return }
         let quartzTopCenter = CGPoint(
-            x: bounds.midX,
-            y: bounds.minY + titleBarHeight + 10
+            x: guideFrame.midX,
+            y: guideFrame.minY
         )
         guard let origin = cocoaPoint(fromQuartzPoint: quartzTopCenter) else {
             window.orderOut(nil)
@@ -1084,14 +1083,30 @@ final class RokidControlApp: NSObject, NSApplicationDelegate {
         }
         window.setFrame(
             NSRect(
-                x: origin.x - width / 2,
+                x: origin.x - guideFrame.width / 2,
                 y: origin.y - NavigationGuideView.height,
-                width: width,
+                width: guideFrame.width,
                 height: NavigationGuideView.height
             ),
             display: true
         )
         window.orderFrontRegardless()
+    }
+
+    private func quartzVisibleScreen(containing point: CGPoint) -> CGRect? {
+        for screen in NSScreen.screens {
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            else { continue }
+            let quartz = CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+            guard quartz.contains(point) else { continue }
+            let visible = screen.visibleFrame
+            return CGRect(
+                x: quartz.minX + visible.minX - screen.frame.minX,
+                y: quartz.minY + screen.frame.maxY - visible.maxY,
+                width: visible.width, height: visible.height
+            )
+        }
+        return nil
     }
 
     private func scrcpyWindowBounds() -> CGRect? {

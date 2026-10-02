@@ -27,6 +27,7 @@ enum LauncherActivityPolicy {
                     value.contains("topResumedActivity=")
                     || value.hasPrefix("mResumedActivity:")
                     || value.hasPrefix("ResumedActivity:")
+                    || value.hasPrefix("mFocusedApp=ActivityRecord{")
                 return isCurrentActivity
                     && value.contains("\(launcherPackage)/")
             }
@@ -53,19 +54,70 @@ enum LauncherShortcut: Int, CaseIterable {
         }
     }
 
-    func horizontalOffset(for screenWidth: Int) -> Int {
-        (rawValue - LauncherShortcut.home.rawValue)
-            * (screenWidth / 15)
+    /// 純正ランチャーの実際の下段領域を3分割して押す。
+    func devicePoint(in indicator: CGRect) -> CGPoint {
+        CGPoint(
+            x: indicator.midX + CGFloat(rawValue - LauncherShortcut.home.rawValue)
+                * indicator.width / 3,
+            y: indicator.midY
+        )
+    }
+}
+
+enum LauncherIndicatorLocator {
+    static func bounds(in xml: String, width: Int, height: Int) -> CGRect? {
+        guard !xml.contains("<!DOCTYPE"), !xml.contains("<!ENTITY") else { return nil }
+        let delegate = IndicatorParser(width: width, height: height)
+        let parser = XMLParser(data: Data(xml.utf8))
+        parser.shouldResolveExternalEntities = false
+        parser.delegate = delegate
+        guard parser.parse(), delegate.matches.count == 1 else { return nil }
+        return delegate.matches[0]
     }
 
-    /// Home画面の下段アイコン位置（Rokidの座標系、左上が原点）。
-    func devicePoint(forScreenWidth width: Int, height: Int) -> CGPoint {
-        CGPoint(
-            x: CGFloat(width) / 2 + CGFloat(horizontalOffset(for: width)),
-            // RV101のYodaOS下段インジケータは640px画面のy=490付近。
-            // 画面中央を使うと、現在のアプリ一覧内を誤タップしてしまう。
-            y: CGFloat(height) * 49 / 64
-        )
+    private final class IndicatorParser: NSObject, XMLParserDelegate {
+        let width: Int
+        let height: Int
+        var matches: [CGRect] = []
+        init(width: Int, height: Int) { self.width = width; self.height = height }
+
+        func parser(
+            _ parser: XMLParser, didStartElement name: String,
+            namespaceURI: String?, qualifiedName: String?,
+            attributes: [String: String]
+        ) {
+            guard name == "node",
+                  attributes["package"] == LauncherActivityPolicy.launcherPackage,
+                  attributes["resource-id"] == "\(LauncherActivityPolicy.launcherPackage):id/indicator",
+                  attributes["enabled"] == "true", attributes["clickable"] == "true",
+                  let bounds = attributes["bounds"],
+                  let regex = try? NSRegularExpression(pattern: #"^\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]$"#),
+                  let match = regex.firstMatch(in: bounds, range: NSRange(bounds.startIndex..., in: bounds))
+            else { return }
+            let numbers = (1...4).compactMap { index -> Int? in
+                guard let range = Range(match.range(at: index), in: bounds) else { return nil }
+                return Int(bounds[range])
+            }
+            guard numbers.count == 4, numbers[0] < numbers[2], numbers[1] < numbers[3],
+                  numbers[2] <= width, numbers[3] <= height else { return }
+            matches.append(CGRect(
+                x: CGFloat(numbers[0]), y: CGFloat(numbers[1]),
+                width: CGFloat(numbers[2] - numbers[0]), height: CGFloat(numbers[3] - numbers[1])
+            ))
+        }
+    }
+}
+
+enum NavigationGuideLayout {
+    /// Quartz座標。映像ウインドウの外へ置き、場所がなければ重ねずに隠す。
+    static func frame(window: CGRect, visibleScreen: CGRect, height: CGFloat = 34) -> CGRect? {
+        let width = min(max(window.width - 24, 160), 460)
+        let x = min(max(window.midX - width / 2, visibleScreen.minX), visibleScreen.maxX - width)
+        let candidates = [
+            CGRect(x: x, y: window.maxY + 8, width: width, height: height),
+            CGRect(x: x, y: window.minY - 8 - height, width: width, height: height),
+        ]
+        return candidates.first { visibleScreen.contains($0) && !$0.intersects(window) }
     }
 }
 
