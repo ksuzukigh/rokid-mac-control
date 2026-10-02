@@ -7,6 +7,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     private static let hudVisibilityDefaultsKey = "VisionHUDVisibility"
     private static let compactAppSelectionGuide =
         "←→ 選択  Enter決定  Esc戻る"
+    private static let controlsHeight: CGFloat = 34
     private static let legacyBundleIdentifier =
         "io.github.ksuzukigh.rokid-control-vision-test"
 
@@ -127,6 +128,15 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         onClose()
     }
 
+    func windowWillResize(_ sender: NSWindow, to size: NSSize) -> NSSize {
+        let content = sender.contentRect(forFrameRect: NSRect(origin: .zero, size: size))
+        let corrected = NSRect(
+            x: 0, y: 0, width: content.width,
+            height: content.width * deviceSize.height / deviceSize.width + Self.controlsHeight
+        )
+        return sender.frameRect(forContentRect: corrected).size
+    }
+
     func setAppSelection(_ isSelectingApp: Bool) {
         navigationGuideLabel?.stringValue = Self.compactAppSelectionGuide
         navigationGuideLabel?.isHidden = !isSelectingApp
@@ -136,7 +146,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
     private func createVisionWindow() {
         let size = NSSize(
             width: deviceSize.width,
-            height: deviceSize.height
+            height: deviceSize.height + Self.controlsHeight
         )
         let frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(
@@ -146,8 +156,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             defer: false
         )
         window.title = "Rokid AI Glasses RV101（ライブ映像）"
-        window.contentMinSize = NSSize(width: 360, height: 480)
-        window.contentAspectRatio = size
+        window.contentMinSize = NSSize(width: 360, height: 480 + Self.controlsHeight)
         window.center()
         window.delegate = self
 
@@ -155,7 +164,7 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             frame: frame,
             deviceSize: deviceSize
         )
-        displayView.autoresizingMask = [.width, .height]
+        displayView.translatesAutoresizingMaskIntoConstraints = false
         displayView.onTap = { [weak self] x, y in
             self?.keyboard.endAppSelection()
             self?.sendTap(x: x, y: y)
@@ -165,18 +174,31 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             self?.sendKey("KEYCODE_BACK")
         }
 
-        window.contentView = displayView
-        navigationGuideLabel = addWindowControls(to: window)
+        let container = NSView(frame: frame)
+        let (controls, guide) = makeWindowControls()
+        controls.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(displayView)
+        container.addSubview(controls)
+        NSLayoutConstraint.activate([
+            controls.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            controls.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            controls.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            controls.heightAnchor.constraint(equalToConstant: Self.controlsHeight),
+            displayView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            displayView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            displayView.topAnchor.constraint(equalTo: container.topAnchor),
+            displayView.bottomAnchor.constraint(equalTo: controls.topAnchor),
+        ])
+        window.contentView = container
+        navigationGuideLabel = guide
         window.makeKeyAndOrderFront(nil)
 
         self.window = window
         self.displayView = displayView
     }
 
-    private func addWindowControls(to window: NSWindow) -> NSTextField {
-        let accessory = NSTitlebarAccessoryViewController()
-        accessory.layoutAttribute = .bottom
-        let controlPanelHeight: CGFloat = 34
+    private func makeWindowControls() -> (NSView, NSTextField) {
+        let controlPanelHeight = Self.controlsHeight
 
         let background = NSVisualEffectView(
             frame: NSRect(
@@ -210,7 +232,10 @@ final class VisionModeController: NSObject, NSWindowDelegate {
         // 左右キーはRokidの操作へ回すため、このスライダーはマウス操作だけにする。
         slider.refusesFirstResponder = true
         slider.toolTip = "文字とアイコンの明るさ・太さを調整します（マウスで動かします）"
-        slider.widthAnchor.constraint(equalToConstant: 175).isActive = true
+        slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 60).isActive = true
+        let preferredSliderWidth = slider.widthAnchor.constraint(equalToConstant: 175)
+        preferredSliderWidth.priority = .defaultHigh
+        preferredSliderWidth.isActive = true
 
         let separator = NSView()
         separator.wantsLayer = true
@@ -308,17 +333,11 @@ final class VisionModeController: NSObject, NSWindowDelegate {
             stack.centerYAnchor.constraint(equalTo: background.centerYAnchor),
         ])
 
-        accessory.view = background
-        accessory.preferredContentSize = NSSize(
-            width: 480,
-            height: controlPanelHeight
-        )
         background.heightAnchor.constraint(
             equalToConstant: controlPanelHeight
         ).isActive = true
-        window.addTitlebarAccessoryViewController(accessory)
         shortcutButtonsStack = shortcutButtons
-        return guide
+        return (background, guide)
     }
 
     private func makeShortcutButton(
