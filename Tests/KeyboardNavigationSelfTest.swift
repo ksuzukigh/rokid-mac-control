@@ -43,7 +43,21 @@ enum KeyboardNavigationSelfTest {
         testSelectionEndsOnHomeAndMemo()
         testRecoversAfterFailedCommand()
         testGuideText()
+        testSystemAdjustmentScope()
         print("Keyboard navigation self-test passed")
+    }
+
+    private static func testSystemAdjustmentScope() {
+        for activity in SystemAdjustmentPolicy.activities {
+            for component in ["\(SystemAdjustmentPolicy.package)/\(activity)",
+                              "\(SystemAdjustmentPolicy.package)/\(SystemAdjustmentPolicy.package)\(activity)"] {
+                precondition(SystemAdjustmentPolicy.isForeground("topResumedActivity=ActivityRecord{123 u0 \(component) t42}"))
+                precondition(!SystemAdjustmentPolicy.isForeground("Hist #0: ActivityRecord{123 u0 \(component) t42}"))
+                precondition(!SystemAdjustmentPolicy.isForeground("topResumedActivity=ActivityRecord{123 u0 \(component)Extra t42}"))
+            }
+        }
+        precondition(!SystemAdjustmentPolicy.isForeground("ResumedActivity: ActivityRecord{123 u0 com.rokid.os.sprite.launcher/.main.SpriteMainActivity t42}"))
+        precondition(!SystemAdjustmentPolicy.isForeground("ResumedActivity: ActivityRecord{123 u0 other.app/.page.volume.SettingVolumeActivity t42}"))
     }
 
     private static func testKeyboardFocusPolicy() {
@@ -204,10 +218,13 @@ enum KeyboardNavigationSelfTest {
         let sink = MockCommandSink()
         let router = KeyboardCommandRouter(sink: sink)
 
-        for key in [RokidKey.left, .right, .enter] {
-            precondition(router.handle(key) == false)
-        }
-        precondition(sink.drain().isEmpty)
+        precondition(router.handle(.left))
+        precondition(router.handle(.right))
+        precondition(!router.handle(.enter))
+        precondition(sink.drain() == [
+            .adjustSettingIfForeground("KEYCODE_DPAD_LEFT"),
+            .adjustSettingIfForeground("KEYCODE_DPAD_RIGHT"),
+        ])
 
         router.handle(.applications)
         precondition(sink.drain() == [.openShortcut(.applications)])
@@ -226,7 +243,7 @@ enum KeyboardNavigationSelfTest {
         _ = sink.drain()
         router.handle(.left)
         router.handle(.enter)
-        precondition(sink.drain().isEmpty)
+        precondition(sink.drain() == [.adjustSettingIfForeground("KEYCODE_DPAD_LEFT")])
     }
 
     // MARK: - Esc
@@ -323,7 +340,7 @@ enum KeyboardNavigationSelfTest {
             // 終えたあとの左右キーは送らない。
             _ = sink.drain()
             router.handle(.right)
-            precondition(sink.drain().isEmpty, "\(ending): 終了後に矢印を送っている")
+            precondition(sink.drain() == [.adjustSettingIfForeground("KEYCODE_DPAD_RIGHT")], "\(ending): 終了後に無条件の矢印を送っている")
         }
     }
 

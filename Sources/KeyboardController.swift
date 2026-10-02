@@ -46,6 +46,15 @@ private final class ADBCommandSink: RokidCommandSink {
             sendKeyEvent(androidKey)
         case .openShortcut(let shortcut):
             openShortcut(shortcut)
+        case .adjustSettingIfForeground(let androidKey):
+            let serial = connection.currentSerial()
+            let foreground = connection.runADB([
+                "-s", serial, "shell", "dumpsys", "activity", "activities",
+            ], timeout: 2)
+            guard foreground.succeeded,
+                  SystemAdjustmentPolicy.isForeground(foreground.output) else { return }
+            sendKeyEvent(androidKey)
+            logger.log("純正の音量・明るさを左右キーで調整")
         }
     }
 
@@ -82,14 +91,8 @@ private final class ADBCommandSink: RokidCommandSink {
     private func indicatorBounds(serial: String, size: (Int, Int)) -> CGRect? {
         if let cached = cachedIndicator, cached.serial == serial,
            cached.width == size.0, cached.height == size.1 { return cached.bounds }
-        let path = "/data/local/tmp/rokid-control-navigation.xml"
-        let dumped = connection.runADB([
-            "-s", serial, "shell", "uiautomator", "dump", "--compressed", path,
-        ], timeout: 8)
-        guard dumped.succeeded else { return nil }
-        let xml = connection.runADB(["-s", serial, "shell", "cat", path], timeout: 3)
-        _ = connection.runADB(["-s", serial, "shell", "rm", "-f", path], timeout: 3)
-        guard xml.succeeded, let bounds = LauncherIndicatorLocator.bounds(
+        guard let xml = connection.readLauncherNavigationXML(serial),
+              xml.succeeded, let bounds = LauncherIndicatorLocator.bounds(
             in: xml.output, width: size.0, height: size.1
         ) else { return nil }
         cachedIndicator = (serial, size.0, size.1, bounds)

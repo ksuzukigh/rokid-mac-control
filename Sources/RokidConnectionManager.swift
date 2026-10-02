@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 enum RokidConnectionError: LocalizedError {
     case missingResource(String)
@@ -422,6 +423,23 @@ final class RokidConnectionManager {
         stateLock.lock()
         defer { stateLock.unlock() }
         return serial
+    }
+
+    /// UiAutomationの既定動作でR08を抑制せず、位置情報だけを読む。
+    func readLauncherNavigationXML(_ device: String) -> CommandResult? {
+        let local = watchdogURL.deletingLastPathComponent().appendingPathComponent("rokid_ui_reader.jar")
+        let remote = "/data/local/tmp/rokid_control_ui_reader.jar"
+        guard let data = try? Data(contentsOf: local) else { return nil }
+        let expected = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let current = adb(["-s", device, "shell", "sha256sum", remote], timeout: 3)
+        if !current.succeeded || current.output.split(whereSeparator: \.isWhitespace).first.map(String.init) != expected {
+            guard adb(["-s", device, "push", local.path, remote], timeout: 5).succeeded else { return nil }
+            let verified = adb(["-s", device, "shell", "sha256sum", remote], timeout: 3)
+            guard verified.succeeded,
+                  verified.output.split(whereSeparator: \.isWhitespace).first.map(String.init) == expected else { return nil }
+        }
+        return adb(["-s", device, "shell",
+            "CLASSPATH='\(remote)' app_process / io.github.ksuzukigh.rokidcontrol.device.RokidUiReader"], timeout: 8)
     }
 
     func isCurrentConnectionAlive() -> Bool {
@@ -1054,6 +1072,48 @@ final class RokidConnectionManager {
             logger.log("R08の入力サービス登録を復旧（画面移動なし・常駐監視なし）")
         }
         logger.log("R08とMac操作の併用を準備しました（R08のAPK・個人設定は保持）")
+        try startR08DirectionBridge(device)
+    }
+
+    private func startR08DirectionBridge(_ device: String) throws {
+        let info = adb(["-s", device, "shell", "dumpsys", "package", R08RecoveryPolicy.package], timeout: 3)
+        guard info.succeeded, info.output.range(of: #"\bversionCode=36\b"#, options: .regularExpression) != nil else { return }
+        let packages = adb(["-s", device, "shell", "pm", "list", "packages", "-U", R08RecoveryPolicy.package], timeout: 3)
+        guard packages.succeeded, let uid = packages.output.split(whereSeparator: \.isNewline).compactMap({ line -> String? in
+            let fields = line.split(whereSeparator: \.isWhitespace)
+            guard fields.count == 2, fields[0] == "package:\(R08RecoveryPolicy.package)",
+                  fields[1].hasPrefix("uid:") else { return nil }
+            let value = String(fields[1].dropFirst(4))
+            return Int(value) != nil ? value : nil
+        }).first else { throw RokidConnectionError.r08RecoveryFailed }
+        let local = watchdogURL.deletingLastPathComponent().appendingPathComponent("rokid_r08_direction_bridge.sh")
+        let remote = "/data/local/tmp/rokid_control_r08_direction.sh"
+        let pidFile = "/data/local/tmp/rokid_control_r08_direction.pid"
+        guard let data = try? Data(contentsOf: local) else { throw RokidConnectionError.r08RecoveryFailed }
+        let expected = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let pidRead = adb(["-s", device, "shell", "cat", pidFile], timeout: 3)
+        let pid = pidRead.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if Int(pid) != nil {
+            let process = adb(["-s", device, "shell", "cat", "/proc/\(pid)/cmdline"], timeout: 3)
+            if process.succeeded, process.output.split(whereSeparator: { $0 == "\0" || $0.isWhitespace }).contains(Substring(remote)) {
+                let hash = adb(["-s", device, "shell", "sha256sum", remote], timeout: 3)
+                guard hash.succeeded, hash.output.split(whereSeparator: \.isWhitespace).first.map(String.init) == expected else {
+                    throw RokidConnectionError.r08RecoveryFailed
+                }
+                logger.log("R08の音量・明るさの橋渡しは継続中 pid=\(pid)")
+                return
+            }
+        }
+        guard adb(["-s", device, "push", local.path, remote], timeout: 5).succeeded,
+              adb(["-s", device, "shell", "chmod", "700", remote], timeout: 3).succeeded else {
+            throw RokidConnectionError.r08RecoveryFailed
+        }
+        let verified = adb(["-s", device, "shell", "sha256sum", remote], timeout: 3)
+        guard verified.succeeded, verified.output.split(whereSeparator: \.isWhitespace).first.map(String.init) == expected,
+              adb(["-s", device, "shell", "sh", remote, "start", uid], timeout: 3).succeeded else {
+            throw RokidConnectionError.r08RecoveryFailed
+        }
+        logger.log("R08の音量・明るさの橋渡しを準備しました")
     }
 
     private func discoverSecureWiFi() -> [String] {
